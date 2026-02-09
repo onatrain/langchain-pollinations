@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+import json
+from typing import Any, cast
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+
+# Formatos permitidos por api.json para input_audio.format
+_ALLOWED_AUDIO_FORMATS = {"wav", "mp3", "flac", "opus", "pcm16"}
+
+
+def _lc_tool_call_to_openai_tool_call(tc: Any) -> dict[str, Any]:
+    """
+    Convierte LangChain-like ToolCall dict a OpenAI tool_call dict:
+      {"id": "...", "type":"function", "function":{"name":"...", "arguments":"{...json...}"}}
+    """
+    if isinstance(tc, dict) and tc.get("type") == "function" and isinstance(tc.get("function"), dict):
+        return cast(dict[str, Any], tc)
+
+    if not isinstance(tc, dict):
+        raise TypeError("ToolCall must be dict or OpenAI compatible dict.")
+
+    name = tc.get("name") or ""
+    args = tc.get("args", {})
+    if isinstance(args, str):
+        arguments = args
+    else:
+        try:
+            arguments = json.dumps(args if args is not None else {})
+        except Exception:
+            arguments = "{}"
+
+    out: dict[str, Any] = {"type": "function", "function": {"name": name, "arguments": arguments}}
+    if isinstance(tc.get("id"), str):
+        out["id"] = tc["id"]
+    return out
+
+
+def _to_jsonable(obj: Any) -> Any:
+    """Conversión a tipos de Python serializables en JSON."""
+    if obj is None:
+        return None
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(x) for x in obj]
+
+    model_dump = getattr(obj, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _to_jsonable(obj.model_dump())
+        except Exception:
+            pass
+
+    dict_meth = getattr(obj, "dict", None)
+    if callable(dict_meth):
+        try:
+            return _to_jsonable(obj.dict())
+        except Exception:
+            pass
+
+    try:
+        return _to_jsonable(vars(obj))
+    except Exception:
+        return obj
+
+
+def _infer_audio_format_from_mime(mime_type: str) -> str | None:
+    mt = mime_type.strip().lower()
+    if not mt:
+        return None
+
+    # Casos comunes
+    if mt in {"audio/mpeg", "audio/mp3"}:
+        return "mp3"
+    if mt in {"audio/wav", "audio/wave", "audio/x-wav"}:
+        return "wav"
+    if mt in {"audio/flac"}:
+        return "flac"
+    if mt in {"audio/opus"}:
+        return "opus"
+    if mt in {"audio/pcm", "audio/l16"}:
+        # El schema usa pcm16, no pcm
+        return "pcm16"
+
+    # fallback: usa el sufijo si coincide con allowed
+    if "/" in mt:
+        suffix = mt.split("/", 1)[1].strip()
+        if suffix in _ALLOWED_AUDIO_FORMATS:
+            return suffix
+
+    return None
+
+
+def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normaliza cualquier variante 'input_audio' para que cumpla:
+      {"type":"input_audio", "input_audio":{"data": "...base64...", "format":"mp3"}}
+
+    Acepta variantes comunes:
+      - ya-correcta: part["input_audio"] = {"data":..., "format":...}
+      - legacy/LC: part["base64"]=..., part["mime_type"]="audio/mp3"
+      - alt: part["data"]=..., part["format"]="mp3" (top-level)
+      - alt: part["audio"]={"data"/"base64", ...} (top-level)
+    """
+    # 1) Si ya viene bien formada, sólo aseguramos que sea dict jsonable.
+    ia = part.get("input_audio")
+    if isinstance(ia, dict):
+        data = ia.get("data")
+        fmt = ia.get("format")
+        if isinstance(data, str) and data and isinstance(fmt, str) and fmt in _ALLOWED_AUDIO_FORMATS:
+            out = dict(part)
+            out["type"] = "input_audio"
+            out["input_audio"] = {"data": data, "format": fmt}
+            # Limpieza de posibles campos extra que confunden
+            out.pop("base64", None)
+            out.pop("mime_type", None)
+            out.pop("id", None)
+            out.pop("audio", None)
+            out.pop("data", None)
+            out.pop("format", None)
+            return out
+
+    # 2) Extrae data/format desde otras formas.
+    data: str | None = None
+    fmt: str | None = None
+
+    if isinstance(part.get("base64"), str):
+        data = cast(str, part.get("base64"))
+    elif isinstance(part.get("data"), str):
+        data = cast(str, part.get("data"))
+
+    if isinstance(part.get("format"), str):
+        fmt = cast(str, part.get("format"))
+
+    if fmt is None and isinstance(part.get("mime_type"), str):
+        fmt = _infer_audio_format_from_mime(cast(str, part.get("mime_type")))
+
+    # 3) Variante: part["audio"]={...}
+    audio_obj = part.get("audio")
+    if isinstance(audio_obj, dict):
+        if data is None and isinstance(audio_obj.get("data"), str):
+            data = cast(str, audio_obj.get("data"))
+        if data is None and isinstance(audio_obj.get("base64"), str):
+            data = cast(str, audio_obj.get("base64"))
+        if fmt is None and isinstance(audio_obj.get("format"), str):
+            fmt = cast(str, audio_obj.get("format"))
+        if fmt is None and isinstance(audio_obj.get("mime_type"), str):
+            fmt = _infer_audio_format_from_mime(cast(str, audio_obj.get("mime_type")))
+
+    if not (isinstance(data, str) and data):
+        # Deja que el backend dé un error más claro, pero ya con la estructura esperada.
+        data = ""
+
+    if not (isinstance(fmt, str) and fmt in _ALLOWED_AUDIO_FORMATS):
+        # si no podemos inferir, mp3 es el caso más común (y tu ejemplo es mp3)
+        fmt = "mp3"
+
+    out = dict(part)
+    out["type"] = "input_audio"
+    out["input_audio"] = {"data": data, "format": fmt}
+
+    # Limpieza: evita que el gateway interprete mal el part.
+    out.pop("base64", None)
+    out.pop("mime_type", None)
+    out.pop("id", None)
+    out.pop("audio", None)
+    out.pop("data", None)
+    out.pop("format", None)
+
+    return out
+
+
+def _normalize_content_part(part: Any) -> Any:
+    """
+    Normaliza un content part a Pollinations/OpenAI chat.completions.
+    """
+    part = _to_jsonable(part)
+    if not isinstance(part, dict):
+        return part
+
+    t = part.get("type")
+    if not isinstance(t, str):
+        return part
+
+    # Compatibilidad con variantes donde el tipo llega como "audio"
+    if t == "audio":
+        # convierte a input_audio y normaliza cuerpo
+        p2 = dict(part)
+        p2["type"] = "input_audio"
+        # algunos payloads usan key "audio" en vez de input_audio
+        if "audio" in p2 and "input_audio" not in p2:
+            p2["input_audio"] = p2.get("audio")
+        return _normalize_input_audio_part(p2)
+
+    # base64/mime_type sin input_audio
+    if t == "input_audio":
+        return _normalize_input_audio_part(part)
+
+    return part
+
+
+def _normalize_message_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return [_normalize_content_part(p) for p in content]
+    return _to_jsonable(content)
+
+
+def lc_messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    """
+    Convierte mensajes LangChain a mensajes Pollinations/OpenAI-compatible chat.completions.
+    """
+    out: list[dict[str, Any]] = []
+
+    for m in messages:
+        if isinstance(m, SystemMessage):
+            role = "system"
+        elif isinstance(m, HumanMessage):
+            role = "user"
+        elif isinstance(m, ToolMessage):
+            role = "tool"
+        elif isinstance(m, AIMessage):
+            role = "assistant"
+        else:
+            role = getattr(m, "type", "user")
+
+        msg: dict[str, Any] = {"role": role, "content": _normalize_message_content(m.content)}
+
+        name = getattr(m, "name", None)
+        if isinstance(name, str) and name:
+            msg["name"] = name
+
+        cache_control = m.additional_kwargs.get("cache_control")
+        if cache_control is not None:
+            msg["cache_control"] = _to_jsonable(cache_control)
+
+        if isinstance(m, ToolMessage):
+            msg["tool_call_id"] = m.tool_call_id
+
+        if isinstance(m, AIMessage):
+            tool_calls = getattr(m, "tool_calls", None) or []
+            invalid_tool_calls = getattr(m, "invalid_tool_calls", None) or []
+
+            openai_tool_calls: list[dict[str, Any]] = []
+            for tc in tool_calls:
+                openai_tool_calls.append(_lc_tool_call_to_openai_tool_call(tc))
+            for itc in invalid_tool_calls:
+                openai_tool_calls.append(_lc_tool_call_to_openai_tool_call(itc))
+
+            if openai_tool_calls:
+                msg["tool_calls"] = openai_tool_calls
+            else:
+                raw_tool_calls = m.additional_kwargs.get("tool_calls")
+                if raw_tool_calls is not None:
+                    msg["tool_calls"] = _to_jsonable(raw_tool_calls)
+
+            function_call = m.additional_kwargs.get("function_call")
+            if function_call is not None:
+                msg["function_call"] = _to_jsonable(function_call)
+
+            audio = m.additional_kwargs.get("audio")
+            if audio is not None:
+                msg["audio"] = _to_jsonable(audio)
+
+        out.append(msg)
+
+    return out
+
+
+def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
+    """
+    Convierte tools al esquema tool OpenAI:
+      {"type":"function","function":{"name":..., "description":..., "parameters":...}}
+    """
+    if isinstance(tool, dict):
+        return cast(dict[str, Any], _to_jsonable(tool))
+
+    name = getattr(tool, "name", None)
+    description = getattr(tool, "description", None) or (getattr(tool, "__doc__", "") or "").strip()
+
+    params: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
+    args_schema = getattr(tool, "args_schema", None)
+    if args_schema is not None:
+        try:
+            params = args_schema.model_json_schema()
+        except Exception:
+            params = params
+
+    if not isinstance(name, str) or not name:
+        raise TypeError("Tool does not have a 'name' attribute and is not a dict.")
+
+    return {"type": "function", "function": {"name": name, "description": description, "parameters": _to_jsonable(params)}}
+
+
+def safe_json_loads(s: str) -> Any:
+    try:
+        return json.loads(s)
+    except Exception:
+        return s

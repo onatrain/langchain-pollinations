@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-pollinations"
+version = "0.1.0"
+description = "LangChain provider for Pollinations unified API (OpenAI-compatible chat completions + image endpoint)."
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Your Name" }]
+dependencies = [
+  "langchain-core>=1.0.0",
+  "pydantic>=2.6.0",
+  "httpx>=0.27.0",
+  "typing-extensions>=4.10.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langchain_pollinations"]
+
+[tool.hatch.build]
+include = [
+  "src/langchain_pollinations/py.typed",
+]
+
+# Entry point para que LangChain pueda descubrir el chat model.
+[project.entry-points."langchain.chatmodels"]
+pollinations = "langchain_pollinations.chat:ChatPollinations"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+lint.select = ["E", "F", "I", "B", "UP", "SIM"]
+lint.ignore = ["E501"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_any_generics = true
+no_implicit_optional = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+markers = [
+  "integration: tests que requieren POLLINATIONS_API_KEY y red",
+]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+  "langchain>=1.2.8",
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "respx>=0.21.0",
+  "python-dotenv>=1.0.0",
+  "mypy>=1.8.0",
+  "ruff>=0.4.0",
+  "isort>=5.13.0",
+]
