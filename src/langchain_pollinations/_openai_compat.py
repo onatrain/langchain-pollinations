@@ -181,9 +181,26 @@ def _normalize_content_part(part: Any) -> Any:
     if not isinstance(part, dict):
         return part
 
+    # El API del proveedor NO permite `id` dentro de MessageContentPart
+    if "id" in part:
+        part = dict(part)
+        part.pop("id", None)
+
     t = part.get("type")
     if not isinstance(t, str):
         return part
+
+    # Limpieza específica por tipo
+    if t == "text":
+        # dejar solo lo que el schema espera
+        out = {"type": "text", "text": part.get("text", "")}
+        if "cache_control" in part:
+            out["cache_control"] = part["cache_control"]
+        if "cacheControl" in part:
+            out["cacheControl"] = part["cacheControl"]
+        if "cachecontrol" in part:
+            out["cachecontrol"] = part["cachecontrol"]
+        return out
 
     # Compatibilidad con variantes donde el tipo llega como "audio"
     if t == "audio":
@@ -199,6 +216,7 @@ def _normalize_content_part(part: Any) -> Any:
     if t == "input_audio":
         return _normalize_input_audio_part(part)
 
+    # Otros tipos (image_url / video_url / file) se dejan pasar, pero ya sin `id`
     return part
 
 
@@ -208,6 +226,25 @@ def _normalize_message_content(content: Any) -> Any:
     if isinstance(content, list):
         return [_normalize_content_part(p) for p in content]
     return _to_jsonable(content)
+
+
+def _extract_text_from_parts(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+
+    chunks: list[str] = []
+    for p in content:
+        if isinstance(p, str):
+            chunks.append(p)
+        elif isinstance(p, dict):
+            # soporta tanto {type:text,text:...} como variantes
+            if p.get("type") == "text" and isinstance(p.get("text"), str):
+                chunks.append(p["text"])
+            elif isinstance(p.get("content"), str):
+                chunks.append(p["content"])
+    return "\n".join([c for c in chunks if c])
 
 
 def lc_messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, Any]]:
@@ -228,11 +265,18 @@ def lc_messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, Any]]:
         else:
             role = getattr(m, "type", "user")
 
-        msg: dict[str, Any] = {"role": role, "content": _normalize_message_content(m.content)}
+        content = _normalize_message_content(m.content)
 
-        name = getattr(m, "name", None)
-        if isinstance(name, str) and name:
-            msg["name"] = name
+        # Si es ToolMessage: el API es más estricto, mandar string y evitar `name`
+        if isinstance(m, ToolMessage):
+            content = _extract_text_from_parts(content)  # <- string
+            msg: dict[str, Any] = {"role": "tool", "content": content, "tool_call_id": m.tool_call_id}
+            # NO incluir msg["name"]
+        else:
+            msg = {"role": role, "content": content}
+            name = getattr(m, "name", None)
+            if isinstance(name, str) and name:
+                msg["name"] = name
 
         cache_control = m.additional_kwargs.get("cache_control")
         if cache_control is not None:

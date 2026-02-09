@@ -47,7 +47,7 @@ class PollinationsHttpClient:
                 except Exception:
                     logging.warning("HTTPX REQUEST body=(binary) len=%s", len(request.content))
 
-        def _log_response(response: httpx.Response) -> None:
+        def _log_response_sync(response: httpx.Response) -> None:
             if not self._debug_http:
                 return
             req = response.request
@@ -65,9 +65,30 @@ class PollinationsHttpClient:
             except Exception as e:
                 logging.warning("HTTPX RESPONSE body=(unreadable) err=%r", e)
 
-        hooks = {"request": [_log_request], "response": [_log_response]}
-        self._client = httpx.Client(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks)
-        self._aclient = httpx.AsyncClient(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks)
+        async def _log_request_async(request: httpx.Request) -> None:
+            _log_request(request)
+
+        async def _log_response_async(response: httpx.Response) -> None:
+            if not self._debug_http:
+                return
+            req = response.request
+            logging.warning("HTTPX RESPONSE %s %s -> %s", req.method, req.url, response.status_code)
+            logging.warning("HTTPX RESPONSE headers=%s", dict(response.headers))
+            ctype = response.headers.get("content-type", "")
+            if "text/event-stream" in ctype:
+                logging.warning("HTTPX RESPONSE body=(event-stream; not auto-logged)")
+                return
+            try:
+                await response.aread()
+                logging.warning("HTTPX RESPONSE body=%s", response.text)
+            except Exception as e:
+                logging.warning("HTTPX RESPONSE body=(unreadable) err=%r", e)
+
+        hooks_sync = {"request": [_log_request], "response": [_log_response_sync]}
+        hooks_async = {"request": [_log_request_async], "response": [_log_response_async]}
+
+        self._client = httpx.Client(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks_sync)
+        self._aclient = httpx.AsyncClient(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks_async)
 
     def close(self) -> None:
         self._client.close()
