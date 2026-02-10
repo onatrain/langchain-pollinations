@@ -318,21 +318,91 @@ def lc_messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, Any]]:
 def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
     """
     Convierte tools al esquema tool OpenAI:
-      {"type":"function","function":{"name":..., "description":..., "parameters":...}}
+    {"type":"function","function":{"name":..., "description":..., "parameters":...}}
     """
     if isinstance(tool, dict):
         return cast(dict[str, Any], _to_jsonable(tool))
 
+    # 1) Ruta preferida: usar el conversor de LangChain (maneja BaseTool/StructuredTool correctamente)
+    try:
+        from langchain_core.utils.function_calling import convert_to_openai_tool as _lc_convert_to_openai_tool  # type: ignore
+    except Exception:
+        _lc_convert_to_openai_tool = None
+
+    if _lc_convert_to_openai_tool is not None:
+        try:
+            converted = _lc_convert_to_openai_tool(tool)
+            if isinstance(converted, dict):
+                # Normalmente ya viene como {"type":"function","function":{...}}
+                if converted.get("type") == "function" and isinstance(converted.get("function"), dict):
+                    return cast(dict[str, Any], _to_jsonable(converted))
+                # En algunas versiones podría venir como {"name":...,"description":...,"parameters":...}
+                if "name" in converted and "parameters" in converted:
+                    return cast(
+                        dict[str, Any],
+                        _to_jsonable(
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": converted.get("name"),
+                                    "description": converted.get("description"),
+                                    "parameters": converted.get("parameters"),
+                                },
+                            }
+                        ),
+                    )
+        except Exception:
+            pass
+
+    # 2) Fallbacks: construir desde atributos comunes
     name = getattr(tool, "name", None)
     description = getattr(tool, "description", None) or (getattr(tool, "__doc__", "") or "").strip()
 
+    # default (último recurso)
     params: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
+
+    # 2.1) args_schema (BaseTool clásico)
     args_schema = getattr(tool, "args_schema", None)
     if args_schema is not None:
         try:
-            params = args_schema.model_json_schema()
+            mj = getattr(args_schema, "model_json_schema", None)
+            if callable(mj):
+                params = args_schema.model_json_schema()
         except Exception:
-            params = params
+            pass
+
+    # 2.2) tool_call_schema (StructuredTool en varias versiones)
+    if params.get("properties") == {}:
+        tcs = getattr(tool, "tool_call_schema", None)
+        if tcs is not None:
+            try:
+                mj = getattr(tcs, "model_json_schema", None)
+                if callable(mj):
+                    params = tcs.model_json_schema()
+            except Exception:
+                pass
+
+    # 2.3) get_input_schema()
+    if params.get("properties") == {}:
+        gis = getattr(tool, "get_input_schema", None)
+        if callable(gis):
+            try:
+                schema_obj = gis()
+                mj = getattr(schema_obj, "model_json_schema", None)
+                if callable(mj):
+                    params = schema_obj.model_json_schema()
+            except Exception:
+                pass
+
+    # 2.4) tool.args (en algunos Tools es dict de properties)
+    if params.get("properties") == {}:
+        a = getattr(tool, "args", None)
+        if isinstance(a, dict) and a:
+            # si ya parece JSON schema completo
+            if "type" in a or "properties" in a or "required" in a:
+                params = cast(dict[str, Any], a)
+            else:
+                params = {"type": "object", "properties": cast(dict[str, Any], a), "additionalProperties": True}
 
     if not isinstance(name, str) or not name:
         raise TypeError("Tool does not have a 'name' attribute and is not a dict.")

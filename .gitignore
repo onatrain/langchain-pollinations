@@ -58,3 +58,4 @@ build/
 control/
 examples/chat_completions/outcomes/
 examples/image/outcomes/
+error.txt

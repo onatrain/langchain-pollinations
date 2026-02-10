@@ -176,6 +176,13 @@ class ToolChoiceFunction(BaseModel):
     function: ToolChoiceFunctionInner
 
 
+def _normalize_tool_choice(tc: Any) -> Any:
+    # LangChain a veces usa "any" para "debe llamar alguna tool"
+    if tc == "any":
+        return "required"
+    return tc
+
+
 ToolChoice = Union[Literal["none", "auto", "required"], ToolChoiceFunction]
 
 
@@ -647,7 +654,9 @@ class ChatPollinations(BaseChatModel):
         rd.tools = tool_defs  # type: ignore[assignment]
 
         if tool_choice is not None:
-            rd.tool_choice = tool_choice  # type: ignore[assignment]
+            tool_choice = _normalize_tool_choice(tool_choice)
+            rd.tool_choice = TypeAdapter(ToolChoice).validate_python(tool_choice)  # valida y tipa correctamente
+
         if parallel_tool_calls is not None:
             rd.parallel_tool_calls = parallel_tool_calls  # type: ignore[assignment]
 
@@ -660,7 +669,12 @@ class ChatPollinations(BaseChatModel):
             preserve_multimodal_deltas=self.preserve_multimodal_deltas,
         )
 
-    def _build_payload(self, messages: list[BaseMessage], stop: list[str] | None, **kwargs: Any) -> dict[str, Any]:
+    def _build_payload(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         """
         Construye el request payload.
 
@@ -668,18 +682,47 @@ class ChatPollinations(BaseChatModel):
         (p.e., stream_mode=..., include_names=..., etc.)
         """
         payload: dict[str, Any] = {"messages": lc_messages_to_openai(messages)}
-        payload.update(self.request_defaults.model_dump(by_alias=True, exclude_none=True, exclude_unset=True))
+
+        payload.update(
+            self.request_defaults.model_dump(
+                by_alias=True,
+                exclude_none=True,
+                exclude_unset=True,
+            )
+        )
+
+        if "tool_choice" in payload:
+            payload["tool_choice"] = _normalize_tool_choice(payload.get("tool_choice"))
 
         if stop is not None:
             payload["stop"] = stop
 
-        if kwargs:
-            provider_kwargs = {
-                k: v for k, v in kwargs.items() if (k in ChatPollinationsConfig.model_fields and v is not None)
-            }
-            if provider_kwargs:
-                validated = ChatPollinationsConfig(**provider_kwargs)
-                payload.update(validated.model_dump(by_alias=True, exclude_none=True, exclude_unset=True))
+        provider_kwargs: dict[str, Any] = {}
+        for k, v in kwargs.items():
+            if v is None:
+                continue
+            if k == "stop":
+                if stop is None:
+                    provider_kwargs["stop"] = v
+                continue
+            if k in ChatPollinationsConfig.model_fields:
+                provider_kwargs[k] = v
+
+        if "tool_choice" in provider_kwargs:
+            provider_kwargs["tool_choice"] = _normalize_tool_choice(provider_kwargs.get("tool_choice"))
+
+        if provider_kwargs:
+            validated = ChatPollinationsConfig(**provider_kwargs)
+            payload.update(
+                validated.model_dump(
+                    by_alias=True,
+                    exclude_none=True,
+                    exclude_unset=True,
+                )
+            )
+
+        if "tool_choice" in payload:
+            payload["tool_choice"] = _normalize_tool_choice(payload.get("tool_choice"))
 
         return payload
 
