@@ -177,8 +177,13 @@ class ToolChoiceFunction(BaseModel):
 
 
 def _normalize_tool_choice(tc: Any) -> Any:
-    # LangChain a veces usa "any" para "debe llamar alguna tool"
+    if tc is None:
+        return None
+    # LangChain suele pasar "any" en with_structured_output()
     if tc == "any":
+        return "required"
+    # Algunas capas podrían pasar {"type": "any"} (defensivo)
+    if isinstance(tc, dict) and tc.get("type") == "any":
         return "required"
     return tc
 
@@ -616,46 +621,135 @@ class ChatPollinations(BaseChatModel):
         strict: bool | None = None,
         **kwargs: Any,
     ) -> "ChatPollinations":
-        if kwargs:
-            raise ValueError("No extra fields are allowed in bind_tools().")
+        """
+        Liga tools a la instancia del chat model.
 
-        # tools puede contener:
-        # - langchain tools (@tool, BaseTool, dict con function)
-        # - builtin tools de Pollinations ({ "type": "url_context" }, etc.)
-        openai_tools: list[dict[str, Any]] = []
+        Compatibilidad LangChain:
+        - Acepta **kwargs que LangChain inyecta (p.ej. ls_structured_output_format).
+        - Normaliza tool_choice="any" -> "required" (Pollinations/OpenAI no soporta "any").
+        - Convierte herramientas (incluyendo Pydantic models / TypedDict usados por with_structured_output)
+          a OpenAI tool schema.
+        """
+        # 0) Detectar structured output (LangChain lo inyecta aquí)
+        structured_hint = kwargs.get("ls_structured_output_format")
+        structured_mode = structured_hint is not None
 
-        for t in tools:
-            if isinstance(t, dict) and "type" in t and t.get("type") in {
-                "code_execution",
-                "google_search",
-                "google_maps",
-                "url_context",
-                "computer_use",
-                "file_search",
-            }:
-                # builtin tool, ya está en el formato correcto
-                openai_tools.append(t)
-            else:
-                # tool de función normal → formato OpenAI {"type":"function","function":{...}}
-                td = tool_to_openai_tool(t)
-                if strict is not None:
-                    fn = td.get("function")
-                    if isinstance(fn, dict):
-                        fn["strict"] = strict
-                openai_tools.append(td)
+        # 1) Normaliza tool_choice para compatibilidad con proveedor
+        tool_choice_norm = _normalize_tool_choice(tool_choice) if tool_choice is not None else None
 
-        # Validar/convertir dict -> modelo Pydantic (Union)
-        adapter = TypeAdapter(ToolDef)
-        tool_defs = [adapter.validate_python(t) for t in openai_tools]
+        # 2) Convierte cada tool a dict compatible OpenAI/Pollinations
+        builtin_types = {
+            "code_execution",
+            "google_search",
+            "google_maps",
+            "url_context",
+            "computer_use",
+            "file_search",
+        }
 
-        # NO usar ToolDef.model_validate: ToolDef es solo un Union typing.
-        # Pydantic validará al hacer .model_dump() en ChatPollinationsConfig.
+        def _convert_one_tool(t: Any) -> dict[str, Any]:
+            # 2.1.1) Builtin tool de Pollinations ya viene como dict {"type": "..."}
+            if isinstance(t, dict) and t.get("type") in builtin_types:
+                return cast(dict[str, Any], t)
+
+            # 2.1.2) Si ya viene como OpenAI tool schema {"type":"function","function":{...}}
+            if (
+                isinstance(t, dict)
+                and t.get("type") == "function"
+                and isinstance(t.get("function"), dict)
+            ):
+                out = cast(dict[str, Any], t)
+                if strict is not None and isinstance(out.get("function"), dict):
+                    out = dict(out)
+                    fn = dict(cast(dict[str, Any], out["function"]))
+                    fn["strict"] = strict
+                    out["function"] = fn
+                return out
+
+            # 2.2) Ruta preferida: convertidor oficial de LangChain (maneja BaseTool/StructuredTool/Pydantic/TypedDict)
+            try:
+                from langchain_core.utils.function_calling import convert_to_openai_tool  # type: ignore
+            except Exception:
+                convert_to_openai_tool = None
+
+            if convert_to_openai_tool is not None:
+                try:
+                    converted = convert_to_openai_tool(t)
+                    # Puede venir como {"type":"function","function":{...}} o, según versión, como {"name":...,"parameters":...}
+                    if isinstance(converted, dict):
+                        if converted.get("type") == "function" and isinstance(converted.get("function"), dict):
+                            out = cast(dict[str, Any], converted)
+                        elif "name" in converted and "parameters" in converted:
+                            out = {
+                                "type": "function",
+                                "function": {
+                                    "name": converted.get("name"),
+                                    "description": converted.get("description"),
+                                    "parameters": converted.get("parameters"),
+                                },
+                            }
+                        else:
+                            out = tool_to_openai_tool(t)  # fallback
+                    else:
+                        out = tool_to_openai_tool(t)
+
+                    if strict is not None:
+                        fn = out.get("function")
+                        if isinstance(fn, dict):
+                            fn["strict"] = strict
+                    return out
+                except Exception:
+                    # si el convertidor falla por cualquier motivo, caemos a nuestras heurísticas
+                    pass
+
+            # 2.3) Fallback: si es Pydantic model class o tipo (TypedDict/typing), intentamos schema via Pydantic
+            name = getattr(t, "name", None) or getattr(t, "__name__", None) or "Tool"
+            description = getattr(t, "description", None) or (getattr(t, "__doc__", "") or "").strip() or None
+
+            parameters: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
+
+            # Pydantic BaseModel subclass
+            try:
+                if isinstance(t, type) and issubclass(t, BaseModel):
+                    parameters = cast(dict[str, Any], t.model_json_schema())
+                else:
+                    # TypedDict / typing schema vía TypeAdapter (Pydantic v2)
+                    try:
+                        parameters = cast(dict[str, Any], TypeAdapter(t).json_schema())
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            out = {
+                "type": "function",
+                "function": {
+                    "name": str(name),
+                    "description": description,
+                    "parameters": parameters,
+                },
+            }
+            if strict is not None:
+                out["function"]["strict"] = strict
+            return out
+
+        openai_tools: list[dict[str, Any]] = [_convert_one_tool(t) for t in tools]
+
+        # 3) Validar tools contra nuestro Union Pydantic (ToolDef)
+        adapter_tool = TypeAdapter(ToolDef)
+        tool_defs = [adapter_tool.validate_python(t) for t in openai_tools]
+
+        # 4) Validar tool_choice normalizado contra ToolChoice (evita que quede "any" en request_defaults)
+        if tool_choice_norm is not None:
+            adapter_choice = TypeAdapter(ToolChoice)
+            tool_choice_norm = adapter_choice.validate_python(tool_choice_norm)
+
+        # 5) Clonar request_defaults y devolver una nueva instancia (estilo LangChain bind)
         rd = self.request_defaults.model_copy(deep=True)
         rd.tools = tool_defs  # type: ignore[assignment]
 
-        if tool_choice is not None:
-            tool_choice = _normalize_tool_choice(tool_choice)
-            rd.tool_choice = TypeAdapter(ToolChoice).validate_python(tool_choice)  # valida y tipa correctamente
+        if tool_choice_norm is not None:
+            rd.tool_choice = tool_choice_norm  # type: ignore[assignment]
 
         if parallel_tool_calls is not None:
             rd.parallel_tool_calls = parallel_tool_calls  # type: ignore[assignment]

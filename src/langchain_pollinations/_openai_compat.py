@@ -317,49 +317,74 @@ def lc_messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, Any]]:
 
 def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
     """
-    Convierte tools al esquema tool OpenAI:
+    Convierte herramientas LangChain (BaseTool/StructuredTool/Pydantic model/TypedDict) al esquema:
     {"type":"function","function":{"name":..., "description":..., "parameters":...}}
+
+    Garantía clave: cuando sea posible, "parameters" NO queda vacío ({}) para structured output.
     """
+
+    def _is_schema_empty(params: Any) -> bool:
+        if not isinstance(params, dict):
+            return True
+        # schema vacío o sin propiedades útiles
+        props = params.get("properties")
+        if isinstance(props, dict) and len(props) > 0:
+            return False
+        # a veces TypeAdapter produce $defs y properties vacío; igual lo consideramos vacío para tools
+        if any(k in params for k in ("oneOf", "anyOf", "allOf")):
+            return False
+        # si tiene "required" no vacío, tampoco está vacío
+        req = params.get("required")
+        if isinstance(req, list) and len(req) > 0:
+            return False
+        return True
+
+    def _wrap_as_function(name: str, description: str | None, parameters: dict[str, Any]) -> dict[str, Any]:
+        fn: dict[str, Any] = {"name": name, "parameters": parameters}
+        if isinstance(description, str) and description.strip():
+            fn["description"] = description.strip()
+        return {"type": "function", "function": fn}
+
+    # 0) Si ya viene dict en formato OpenAI, úsalo tal cual
     if isinstance(tool, dict):
-        return cast(dict[str, Any], _to_jsonable(tool))
+        return cast(dict[str, Any], tool)
 
-    # 1) Ruta preferida: usar el conversor de LangChain (maneja BaseTool/StructuredTool correctamente)
+    # 1) Mejor ruta: convertidor oficial de LangChain (maneja más casos que nuestras heurísticas)
     try:
-        from langchain_core.utils.function_calling import convert_to_openai_tool as _lc_convert_to_openai_tool  # type: ignore
+        from langchain_core.utils.function_calling import convert_to_openai_tool as _lc_convert  # type: ignore
     except Exception:
-        _lc_convert_to_openai_tool = None
+        _lc_convert = None
 
-    if _lc_convert_to_openai_tool is not None:
+    if _lc_convert is not None:
         try:
-            converted = _lc_convert_to_openai_tool(tool)
+            converted = _lc_convert(tool)
             if isinstance(converted, dict):
-                # Normalmente ya viene como {"type":"function","function":{...}}
+                # Caso A: ya viene como {"type":"function","function":{...}}
                 if converted.get("type") == "function" and isinstance(converted.get("function"), dict):
-                    return cast(dict[str, Any], _to_jsonable(converted))
-                # En algunas versiones podría venir como {"name":...,"description":...,"parameters":...}
-                if "name" in converted and "parameters" in converted:
-                    return cast(
-                        dict[str, Any],
-                        _to_jsonable(
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": converted.get("name"),
-                                    "description": converted.get("description"),
-                                    "parameters": converted.get("parameters"),
-                                },
-                            }
-                        ),
-                    )
+                    fn = converted.get("function") or {}
+                    params = fn.get("parameters")
+                    # Si el schema quedó vacío, seguimos intentando inferirlo abajo
+                    if not _is_schema_empty(params):
+                        return cast(dict[str, Any], converted)
+
+                # Caso B: algunas versiones devuelven {"name","description","parameters"}
+                if "name" in converted and "parameters" in converted and isinstance(converted.get("name"), str):
+                    params = converted.get("parameters")
+                    if isinstance(params, dict) and not _is_schema_empty(params):
+                        return _wrap_as_function(
+                            name=cast(str, converted["name"]),
+                            description=cast(str | None, converted.get("description")),
+                            parameters=cast(dict[str, Any], params),
+                        )
         except Exception:
             pass
 
-    # 2) Fallbacks: construir desde atributos comunes
-    name = getattr(tool, "name", None)
-    description = getattr(tool, "description", None) or (getattr(tool, "__doc__", "") or "").strip()
+    # 2) Fallback robusto: intentar inferir schema de Pydantic/TypedDict/typing
+    name = getattr(tool, "name", None) or getattr(tool, "__name__", None) or "Tool"
+    description = getattr(tool, "description", None) or (getattr(tool, "__doc__", "") or "").strip() or None
 
-    # default (último recurso)
-    params: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
+    # default (si no podemos inferir)
+    parameters: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
 
     # 2.1) args_schema (BaseTool clásico)
     args_schema = getattr(tool, "args_schema", None)
@@ -367,47 +392,70 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
         try:
             mj = getattr(args_schema, "model_json_schema", None)
             if callable(mj):
-                params = args_schema.model_json_schema()
+                candidate = cast(dict[str, Any], args_schema.model_json_schema())
+                if not _is_schema_empty(candidate):
+                    parameters = candidate
         except Exception:
             pass
 
-    # 2.2) tool_call_schema (StructuredTool en varias versiones)
-    if params.get("properties") == {}:
+    # 2.2) tool_call_schema (StructuredTool / otros)
+    if _is_schema_empty(parameters):
         tcs = getattr(tool, "tool_call_schema", None)
         if tcs is not None:
             try:
                 mj = getattr(tcs, "model_json_schema", None)
                 if callable(mj):
-                    params = tcs.model_json_schema()
+                    candidate = cast(dict[str, Any], tcs.model_json_schema())
+                    if not _is_schema_empty(candidate):
+                        parameters = candidate
             except Exception:
                 pass
 
     # 2.3) get_input_schema()
-    if params.get("properties") == {}:
+    if _is_schema_empty(parameters):
         gis = getattr(tool, "get_input_schema", None)
         if callable(gis):
             try:
                 schema_obj = gis()
                 mj = getattr(schema_obj, "model_json_schema", None)
                 if callable(mj):
-                    params = schema_obj.model_json_schema()
+                    candidate = cast(dict[str, Any], schema_obj.model_json_schema())
+                    if not _is_schema_empty(candidate):
+                        parameters = candidate
             except Exception:
                 pass
 
-    # 2.4) tool.args (en algunos Tools es dict de properties)
-    if params.get("properties") == {}:
-        a = getattr(tool, "args", None)
-        if isinstance(a, dict) and a:
-            # si ya parece JSON schema completo
-            if "type" in a or "properties" in a or "required" in a:
-                params = cast(dict[str, Any], a)
-            else:
-                params = {"type": "object", "properties": cast(dict[str, Any], a), "additionalProperties": True}
+    # 2.4) Pydantic model class (BaseModel)
+    if _is_schema_empty(parameters):
+        try:
+            from pydantic import BaseModel  # type: ignore
+        except Exception:
+            BaseModel = None  # type: ignore
 
-    if not isinstance(name, str) or not name:
-        raise TypeError("Tool does not have a 'name' attribute and is not a dict.")
+        try:
+            if BaseModel is not None and isinstance(tool, type) and issubclass(tool, BaseModel):  # type: ignore[arg-type]
+                candidate = cast(dict[str, Any], tool.model_json_schema())  # type: ignore[attr-defined]
+                if not _is_schema_empty(candidate):
+                    parameters = candidate
+        except Exception:
+            pass
 
-    return {"type": "function", "function": {"name": name, "description": description, "parameters": _to_jsonable(params)}}
+    # 2.5) TypedDict / typing types via TypeAdapter (Pydantic v2)
+    if _is_schema_empty(parameters):
+        try:
+            from pydantic import TypeAdapter  # type: ignore
+        except Exception:
+            TypeAdapter = None  # type: ignore
+
+        if TypeAdapter is not None:
+            try:
+                candidate = cast(dict[str, Any], TypeAdapter(tool).json_schema())  # type: ignore[misc]
+                if not _is_schema_empty(candidate):
+                    parameters = candidate
+            except Exception:
+                pass
+
+    return _wrap_as_function(name=str(name), description=cast(str | None, description), parameters=parameters)
 
 
 def safe_json_loads(s: str) -> Any:
