@@ -128,7 +128,7 @@ Sirve para registrar:
 Ejecutar integración con debug activado:
 
 ```bash
-POLLINATIONS_HTTP_DEBUG=1 uv run pytest -m tests/ -q -s
+POLLINATIONS_HTTP_DEBUG=1 uv run integration -m tests/ -q -s
 ```
 
 Qué buscar en logs:
@@ -148,13 +148,34 @@ Sirve para ver el flujo de red:
 - recepción de headers/body,
 - y en streaming, si el body se corta prematuramente.
 
-Ejecutar:
+### 4.2 Configurar el logging en el programa o test que se quiere depurar
 
-```bash
-uv run pytest -m test/integration/ -q -s
+Agregar al inicio del programa o suite de tests:
+```
+if os.getenv("POLLINATIONS_HTTP_DEBUG", "").lower() in {"1", "true", "yes", "on"}:
+    import logging
+
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(levelname)s [%(asctime)s] %(name)s - %(message)s",
+    )
+
+    # httpcore es el motor interno de httpx
+    logging.getLogger("httpcore").setLevel(logging.DEBUG)
+    logging.getLogger("httpx").setLevel(logging.DEBUG)
 ```
 
-(Con logging configurado en el entorno de tests o script de arranque.)
+### 4.3 Ejecutar el programa o tests que se quieren depurar
+Ejecutar tests:
+
+```bash
+POLLINATIONS_HTTP_DEBUG=1 uv run pytest -m integration -q -s
+```
+o el programa a depurar:
+
+```bash
+POLLINATIONS_HTTP_DEBUG=1 uv run program_to_debug.py
+```
 
 Qué revisar:
 - `receive_response_headers.complete`
