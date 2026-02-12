@@ -1311,87 +1311,6 @@ def test_chat_pollinations_bind_tools_already_openai_format():
     assert result_tool.function.name == "existing_tool"
 
 
-# Test inhabilitado hasta que se resuelva el bug en _parse_tool_calls()
-'''
-def test_chat_pollinations_parse_chat_result_with_invalid_tool_calls():
-    """Cubrir mensaje con invalid_tool_calls"""
-    chat = ChatPollinations()
-
-    data = {
-        "id": "chatcmpl-123",
-        "model": "openai",
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{
-                    "type": "function",
-                    "id": "call_bad",
-                    "function": {
-                        "name": "bad_tool",
-                        "arguments": '{invalid json'
-                    }
-                }]
-            },
-            "finish_reason": "tool_calls"
-        }],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-    }
-
-    result = chat._parse_chat_result(data)
-
-    gen = result.generations[0]
-    # invalid_tool_calls requiere que args sea string, no dict
-    assert len(gen.message.invalid_tool_calls) == 1
-    invalid_call = gen.message.invalid_tool_calls[0]
-    assert invalid_call["name"] == "bad_tool"
-    assert invalid_call["type"] == "invalid_tool_call"
-    # args debe ser string vacío según el schema de LangChain
-    assert invalid_call["args"] == "{}"  # Se envía como string en invalid_tool_calls
-'''
-
-
-def test_chat_pollinations_parse_chat_result_with_invalid_tool_calls():
-    """Cubrir mensaje con invalid_tool_calls - verifica que se manejan en additional_kwargs"""
-    chat = ChatPollinations()
-
-    # Nota: LangChain requiere que invalid_tool_calls.args sea string, no dict.
-    # El código actual de _parse_tool_calls pone args={} (dict) para casos inválidos,
-    # lo que causa un error de validación de Pydantic en AIMessage.
-    # Este test verifica que los tool_calls inválidos se mantienen en additional_kwargs
-    # hasta que se corrija el código para enviar args como string.
-
-    data = {
-        "id": "chatcmpl-123",
-        "model": "openai",
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{
-                    "type": "function",
-                    "id": "call_bad",
-                    "function": {
-                        "name": "bad_tool",
-                        "arguments": '{invalid json'
-                    }
-                }]
-            },
-            "finish_reason": "tool_calls"
-        }],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-    }
-
-    # El código actual lanza ValidationError porque args en invalid_tool_calls es dict en lugar de string
-    # Verificar que el error ocurra como se espera
-    with pytest.raises(Exception) as exc_info:
-        result = chat._parse_chat_result(data)
-
-    # Verificar que es un error de validación de Pydantic relacionado con invalid_tool_calls
-    assert "ValidationError" in str(type(exc_info.value))
-    assert "invalid_tool_calls" in str(exc_info.value) or "args" in str(exc_info.value)
-
-
 def test_chat_pollinations_parse_chat_result_with_valid_tool_calls():
     """Cubrir mensaje con tool_calls válidos (JSON correcto)"""
     chat = ChatPollinations()
@@ -2328,3 +2247,195 @@ def test_parse_tool_calls_valid_non_dict_handling():
     assert tool_calls[0]["args"] == {"valid": "dict"}
     assert len(invalid) == 0
 
+
+def test_chat_pollinations_parse_chat_result_with_invalid_tool_calls():
+    """
+    Verifica que tool calls con JSON malformado se manejen correctamente:
+    - Se agregan a invalid_tool_calls (no a tool_calls)
+    - El campo 'args' debe ser el string original malformado (no un dict vacío)
+    - Cumple con el contrato de LangChain v1.2.8+ para InvalidToolCall
+    """
+    chat = ChatPollinations()
+
+    # Payload con un tool call que tiene arguments JSON inválido
+    data = {
+        "id": "chatcmpl-123",
+        "model": "openai",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "id": "call_bad",
+                            "function": {
+                                "name": "badtool",
+                                "arguments": "{invalid json}"  # JSON malformado
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15
+        }
+    }
+
+    # Después del fix, este parsing debe funcionar sin lanzar ValidationError
+    result = chat._parse_chat_result(data)
+    gen = result.generations[0]
+
+    # Validaciones: debe estar en invalid_tool_calls, NO en tool_calls
+    assert len(gen.message.invalid_tool_calls) == 1
+    assert len(gen.message.tool_calls) == 0
+
+    # El invalid tool call debe tener el string original en args
+    invalid_call = gen.message.invalid_tool_calls[0]
+    assert invalid_call["name"] == "badtool"
+    assert invalid_call["type"] == "invalid_tool_call"
+
+    # CRÍTICO: args debe ser el string malformado original, NO un dict vacío
+    assert isinstance(invalid_call["args"], str)
+    assert invalid_call["args"] == "{invalid json}"
+
+    # Debe incluir información del error
+    assert "error" in invalid_call
+    assert invalid_call["id"] == "call_bad"
+
+
+def test_chat_pollinations_parse_chat_result_with_valid_tool_calls():
+    """
+    Verifica que tool calls con JSON válido se procesen correctamente:
+    - Se agregan a tool_calls (no a invalid_tool_calls)
+    - El campo 'args' debe ser un dict con los parámetros parseados
+    - Cumple con el contrato de LangChain v1.2.8+ para ToolCall
+    """
+    chat = ChatPollinations()
+
+    # Payload con un tool call que tiene arguments JSON válido
+    data = {
+        "id": "chatcmpl-456",
+        "model": "openai",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "id": "call_good",
+                            "function": {
+                                "name": "goodtool",
+                                "arguments": '{"param": "value"}'  # JSON válido
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15
+        }
+    }
+
+    result = chat._parse_chat_result(data)
+    gen = result.generations[0]
+
+    # Validaciones: debe estar en tool_calls, NO en invalid_tool_calls
+    assert len(gen.message.tool_calls) == 1
+    assert len(gen.message.invalid_tool_calls) == 0
+
+    # El tool call válido debe tener args como dict parseado
+    valid_call = gen.message.tool_calls[0]
+    assert valid_call["name"] == "goodtool"
+    assert valid_call["type"] == "tool_call"
+
+    # CRÍTICO: args debe ser un dict con los parámetros parseados
+    assert isinstance(valid_call["args"], dict)
+    assert valid_call["args"] == {"param": "value"}
+
+    assert valid_call["id"] == "call_good"
+
+
+def test_chat_pollinations_parse_chat_result_with_mixed_tool_calls():
+    """
+    Verifica el manejo de múltiples tool calls mezclados
+    (algunos válidos, otros inválidos) en la misma respuesta.
+    """
+    chat = ChatPollinations()
+
+    data = {
+        "id": "chattcp-456789",
+        "model": "openai",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "id": "call_1",
+                            "function": {
+                                "name": "valid_tool",
+                                "arguments": '{"x": 10, "y": 20}'
+                            }
+                        },
+                        {
+                            "type": "function",
+                            "id": "call_2",
+                            "function": {
+                                "name": "invalid_tool",
+                                "arguments": "{broken: json"
+                            }
+                        },
+                        {
+                            "type": "function",
+                            "id": "call_3",
+                            "function": {
+                                "name": "another_valid",
+                                "arguments": '{"status": "ok"}'
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 15,
+            "completion_tokens": 10,
+            "total_tokens": 25
+        }
+    }
+
+    result = chat._parse_chat_result(data)
+    gen = result.generations[0]
+
+    # Debe haber 2 válidos y 1 inválido
+    assert len(gen.message.tool_calls) == 2
+    assert len(gen.message.invalid_tool_calls) == 1
+
+    # Validar tool calls válidos
+    assert gen.message.tool_calls[0]["name"] == "valid_tool"
+    assert isinstance(gen.message.tool_calls[0]["args"], dict)
+    assert gen.message.tool_calls[0]["args"] == {"x": 10, "y": 20}
+
+    assert gen.message.tool_calls[1]["name"] == "another_valid"
+    assert isinstance(gen.message.tool_calls[1]["args"], dict)
+    assert gen.message.tool_calls[1]["args"] == {"status": "ok"}
+
+    # Validar invalid tool call
+    assert gen.message.invalid_tool_calls[0]["name"] == "invalid_tool"
+    assert isinstance(gen.message.invalid_tool_calls[0]["args"], str)
+    assert gen.message.invalid_tool_calls[0]["args"] == "{broken: json"

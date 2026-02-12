@@ -523,7 +523,7 @@ def _parse_tool_calls(message: dict[str, Any]) -> tuple[list[dict[str, Any]], li
                     args = loaded
             except Exception as e:
                 invalid.append(
-                    {"name": name, "args": {}, "id": tc_id, "type": "invalid_tool_call", "error": str(e)}
+                    {"name": name, "args": args_s, "id": tc_id, "type": "invalid_tool_call", "error": str(e)}
                 )
                 continue
 
