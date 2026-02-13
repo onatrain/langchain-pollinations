@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
-import httpx
 import logging
 import os
+from dataclasses import dataclass
+from typing import Any, Callable
+
+import httpx
 
 from langchain_pollinations._errors import PollinationsAPIError
 
@@ -84,8 +84,10 @@ class PollinationsHttpClient:
             except Exception as e:
                 logging.warning("HTTPX RESPONSE body=(unreadable) err=%r", e)
 
-        hooks_sync = {"request": [_log_request], "response": [_log_response_sync]}
-        hooks_async = {"request": [_log_request_async], "response": [_log_response_async]}
+        EventHooksDict = dict[str, list[Callable[..., Any]]]
+
+        hooks_sync: EventHooksDict = {"request": [_log_request], "response": [_log_response_sync]}
+        hooks_async: EventHooksDict = {"request": [_log_request_async], "response": [_log_response_async]}
 
         self._client = httpx.Client(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks_sync)
         self._aclient = httpx.AsyncClient(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks_async)

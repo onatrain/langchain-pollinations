@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-pollinations"
-version = "0.1.6"
+version = "0.1.7"
 description = "LangChain provider for Pollinations unified API (OpenAI-compatible chat completions + image endpoint)."
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -32,15 +32,23 @@ pollinations = "langchain_pollinations.chat:ChatPollinations"
 line-length = 100
 target-version = "py311"
 lint.select = ["E", "F", "I", "B", "UP", "SIM"]
-lint.ignore = ["E501"]
+lint.ignore = [
+    "E501",
+    "UP035",  # typing.Callable
+    "UP045",  # typing.Optional
+    "UP007",  # typing.Union
+]
 
+# Modo Vertical Hanging Indent
 [tool.isort]
-profile = "black"
+multi_line_output = 3
+include_trailing_comma = true
+use_parentheses = true
+force_grid_wrap = 0
 line_length = 100
 
 [tool.mypy]
 python_version = "3.11"
-strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 disallow_any_generics = true

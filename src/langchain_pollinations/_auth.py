@@ -11,7 +11,7 @@ class AuthConfig:
     api_key: str
 
     @staticmethod
-    def from_env_or_value(api_key: str | None) -> "AuthConfig":
+    def from_env_or_value(api_key: str | None) -> AuthConfig:
         key = api_key or os.getenv(ENV_API_KEY)
         if not key:
             raise ValueError("API key missing. Define POLLINATIONS_API_KEY in environment or pass api_key value")

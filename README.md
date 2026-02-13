@@ -13,18 +13,17 @@
 
 [![Build](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/onatrain/langchain-pollinations)
 [![Coverage](https://img.shields.io/badge/coverage-96%25-9C27B0)](https://github.com/onatrain/langchain-pollinations)
-[![Status](https://img.shields.io/badge/status-beta-orange)](https://github.com/onatrain/langchain-pollinations)
+[![Status](https://img.shields.io/badge/status-unreleased-orange)](https://github.com/onatrain/langchain-pollinations)
 [![License](https://img.shields.io/github/license/onatrain/langchain-pollinations?label=license&color=97CA00)](LICENSE.md)
 [![Python Versions](https://img.shields.io/badge/python-3.11+-3776AB?logo=python)](https://github.com/onatrain/langchain-pollinations)
 <br>
 [![LangChain](https://img.shields.io/badge/langchain-1d3d3c?logo=langchain)](https://www.langchain.com/)
 [![LangGraph](https://img.shields.io/badge/langgraph-053d5b?logo=langgraph)](https://www.langchain.com/langgraph)
-
 </div>
 
 --- 
 
-**langchain-pollinations** provides LangChain-native wrappers for the [Pollinations.ai](https://enter.pollinations.ai) provider, designed to plug into the modern LangChain ecosystem (v1.2x) while staying strictly aligned with Pollinations.ai endpoints.
+**langchain-pollinations** provides LangChain-native wrappers for the [Pollinations.ai](https://enter.pollinations.ai) provider, designed to plug into the modern LangChain ecosystem (v1.2x) while staying strictly aligned with [Pollinations.ai endpoints](https://enter.pollinations.ai/api/docs).
 
 It includes:
 - `ChatPollinations`: a chat model wrapper for the OpenAI-compatible endpoint `POST /v1/chat/completions`.
@@ -34,7 +33,7 @@ It includes:
 
 ## Why this project
 
-Pollinations.ai offers a unified gateway for text, vision, tools, and media generation. This project makes it easy to use that gateway with LangChain patterns (invoke/stream, tool calling, and message formats) while keeping the surface area small and predictable.
+[Pollinations.ai](https://enter.pollinations.ai) offers a unified gateway for text, vision, tools, and media generation. This project makes it easy to use that gateway with LangChain patterns (invoke/stream, tool calling, and message formats) while keeping the surface area small and predictable.
 
 ## Installation
 

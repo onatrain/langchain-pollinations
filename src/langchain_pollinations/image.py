@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import httpx
-
 from typing import Any, Literal, Optional
-
 from urllib.parse import quote
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from langchain_pollinations._auth import AuthConfig
@@ -118,7 +116,7 @@ class ImagePollinations(BaseModel):
 
     # --------- API "bind/clone" ---------
 
-    def with_params(self, **overrides: Any) -> "ImagePollinations":
+    def with_params(self, **overrides: Any) -> ImagePollinations:
         """
         Clona el cliente con nuevos defaults (sin mutar el original).
         """
@@ -165,7 +163,7 @@ class ImagePollinations(BaseModel):
 
     # --------- Métodos principales ---------
 
-    def generate_response(self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> "httpx.Response":
+    def generate_response(self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> httpx.Response:
         """
         Retorna httpx.Response para poder leer:
         - response.headers["content-type"]
@@ -181,7 +179,7 @@ class ImagePollinations(BaseModel):
 
     async def agenerate_response(
         self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any
-    ) -> "httpx.Response":
+    ) -> httpx.Response:
         encoded = quote(prompt, safe="")
         q = self._build_query(params, **kwargs)
         return await self._http.aget(f"/image/{encoded}", params=q)

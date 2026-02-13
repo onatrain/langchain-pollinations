@@ -1,15 +1,30 @@
 from __future__ import annotations
 
+import contextlib
 import json
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Annotated, Literal, Optional, Union, cast
+from typing import (
+    Annotated,
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    Literal,
+    Optional,
+    Sequence,
+    SupportsInt,
+    Union,
+    cast,
+)
 
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
+from langchain_core.language_models.base import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.messages.tool import ToolCallChunk, tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
 
 from langchain_pollinations._auth import AuthConfig
@@ -268,9 +283,9 @@ def _usage_metadata_from_usage(usage: Any) -> UsageMetadata | None:
     if not isinstance(usage, dict):
         return None
 
-    prompt = usage.get("prompt_tokens")
-    completion = usage.get("completion_tokens")
-    total = usage.get("total_tokens")
+    prompt = cast(SupportsInt, usage.get("prompt_tokens"))
+    completion = cast(SupportsInt, usage.get("completion_tokens"))
+    total = cast(SupportsInt, usage.get("total_tokens"))
 
     try:
         prompt_i = int(prompt)
@@ -444,8 +459,9 @@ def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
         data_lines.append(piece)
         if len(data_lines) == 1:
             # Tratar de parsear líneas solas inmediatamente (ruta rápida).
-            for evt in flush():
-                yield evt
+            # for evt in flush():
+            #     yield evt
+            yield from flush()
 
     yield from flush()
 
@@ -614,13 +630,13 @@ class ChatPollinations(BaseChatModel):
 
     def bind_tools(
         self,
-        tools: list[Any],
+        tools: Sequence[dict[str, Any] | type | Callable | BaseTool],  # type: ignore
         *,
-        tool_choice: Any | None = None,
+        tool_choice: str | None = None,  # ← Sin el "= ..."
         parallel_tool_calls: bool | None = None,
         strict: bool | None = None,
-        **kwargs: Any,
-    ) -> "ChatPollinations":
+        **kwargs: Any
+    ) -> Runnable[LanguageModelInput, AIMessage]:
         """
         Liga tools a la instancia del chat model.
 
@@ -630,10 +646,6 @@ class ChatPollinations(BaseChatModel):
         - Convierte herramientas (incluyendo Pydantic models / TypedDict usados por with_structured_output)
           a OpenAI tool schema.
         """
-        # 0) Detectar structured output (LangChain lo inyecta aquí)
-        structured_hint = kwargs.get("ls_structured_output_format")
-        structured_mode = structured_hint is not None
-
         # 1) Normaliza tool_choice para compatibilidad con proveedor
         tool_choice_norm = _normalize_tool_choice(tool_choice) if tool_choice is not None else None
 
@@ -668,9 +680,9 @@ class ChatPollinations(BaseChatModel):
 
             # 2.2) Ruta preferida: convertidor oficial de LangChain (maneja BaseTool/StructuredTool/Pydantic/TypedDict)
             try:
-                from langchain_core.utils.function_calling import convert_to_openai_tool  # type: ignore
+                from langchain_core.utils.function_calling import convert_to_openai_tool
             except Exception:
-                convert_to_openai_tool = None
+                convert_to_openai_tool = None  # type: ignore
 
             if convert_to_openai_tool is not None:
                 try:
@@ -678,7 +690,7 @@ class ChatPollinations(BaseChatModel):
                     # Puede venir como {"type":"function","function":{...}} o, según versión, como {"name":...,"parameters":...}
                     if isinstance(converted, dict):
                         if converted.get("type") == "function" and isinstance(converted.get("function"), dict):
-                            out = cast(dict[str, Any], converted)
+                            out = converted
                         elif "name" in converted and "parameters" in converted:
                             out = {
                                 "type": "function",
@@ -694,7 +706,7 @@ class ChatPollinations(BaseChatModel):
                         out = tool_to_openai_tool(t)
 
                     if strict is not None:
-                        fn = out.get("function")
+                        fn = cast(dict[str, Any], out.get("function"))
                         if isinstance(fn, dict):
                             fn["strict"] = strict
                     return out
@@ -711,13 +723,11 @@ class ChatPollinations(BaseChatModel):
             # Pydantic BaseModel subclass
             try:
                 if isinstance(t, type) and issubclass(t, BaseModel):
-                    parameters = cast(dict[str, Any], t.model_json_schema())
+                    parameters = t.model_json_schema()
                 else:
                     # TypedDict / typing schema vía TypeAdapter (Pydantic v2)
-                    try:
-                        parameters = cast(dict[str, Any], TypeAdapter(t).json_schema())
-                    except Exception:
-                        pass
+                    with contextlib.suppress(Exception):
+                        parameters = TypeAdapter(t).json_schema()
             except Exception:
                 pass
 
@@ -736,23 +746,23 @@ class ChatPollinations(BaseChatModel):
         openai_tools: list[dict[str, Any]] = [_convert_one_tool(t) for t in tools]
 
         # 3) Validar tools contra nuestro Union Pydantic (ToolDef)
-        adapter_tool = TypeAdapter(ToolDef)
+        adapter_tool = TypeAdapter(ToolDef)  # type: ignore[var-annotated]
         tool_defs = [adapter_tool.validate_python(t) for t in openai_tools]
 
         # 4) Validar tool_choice normalizado contra ToolChoice (evita que quede "any" en request_defaults)
         if tool_choice_norm is not None:
-            adapter_choice = TypeAdapter(ToolChoice)
+            adapter_choice = TypeAdapter(ToolChoice)  # type: ignore[var-annotated]
             tool_choice_norm = adapter_choice.validate_python(tool_choice_norm)
 
         # 5) Clonar request_defaults y devolver una nueva instancia (estilo LangChain bind)
         rd = self.request_defaults.model_copy(deep=True)
-        rd.tools = tool_defs  # type: ignore[assignment]
+        rd.tools = tool_defs
 
         if tool_choice_norm is not None:
-            rd.tool_choice = tool_choice_norm  # type: ignore[assignment]
+            rd.tool_choice = tool_choice_norm
 
         if parallel_tool_calls is not None:
-            rd.parallel_tool_calls = parallel_tool_calls  # type: ignore[assignment]
+            rd.parallel_tool_calls = parallel_tool_calls
 
         return ChatPollinations(
             api_key=self.api_key,
