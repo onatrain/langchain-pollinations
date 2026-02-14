@@ -29,6 +29,9 @@ ImageModelId = Literal[
     "wan",
     "klein",
     "klein-large",
+    "imagen-4",
+    "grok-video",
+    "ltx-2",
 ]
 
 

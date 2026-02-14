@@ -2,19 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from typing import (
-    Annotated,
-    Any,
-    AsyncIterator,
-    Callable,
-    Iterator,
-    Literal,
-    Optional,
-    Sequence,
-    SupportsInt,
-    Union,
-    cast,
-)
+from typing import Annotated, Any, AsyncIterator, Callable, Iterator, Literal, Optional, Sequence, SupportsInt, Union, cast
 
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models.base import LanguageModelInput
@@ -36,7 +24,7 @@ DEFAULT_BASE_URL = "https://gen.pollinations.ai"
 INT53_MAX = 9007199254740991
 
 # ---------------------------------------------------------------------------
-# Request schema (subset alineado a Pollinations OpenAPI, api.json)
+# Request schema subset alineado a Pollinations OpenAPI, api.json
 # ---------------------------------------------------------------------------
 
 TextModelId = Literal[
@@ -56,6 +44,7 @@ TextModelId = Literal[
     "claude-fast",
     "claude",
     "claude-large",
+    "claude-legacy",
     "perplexity-fast",
     "perplexity-reasoning",
     "kimi",
@@ -65,24 +54,17 @@ TextModelId = Literal[
     "glm",
     "minimax",
     "nomnom",
+    "qwen-character",
 ]
 
 Modality = Literal["text", "audio"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
 VoiceId = Literal[
-    "alloy",
-    "echo",
-    "fable",
-    "onyx",
-    "shimmer",
-    "coral",
-    "verse",
-    "ballad",
-    "ash",
-    "sage",
-    "amuch",
-    "dan",
+    "alloy", "echo", "fable", "onyx", "shimmer", "coral", "verse", "ballad", "ash", "sage",
+    "amuch", "dan", "rachel", "domi", "bella", "elli", "charlotte", "dorothy", "sarah",
+    "emily", "lily", "matilda", "adam", "antoni", "arnold", "josh", "sam", "daniel",
+    "charlie", "james", "fin", "callum", "liam", "george", "brian", "bill"
 ]
 
 AudioFormat = Literal["wav", "mp3", "flac", "opus", "pcm16"]
@@ -128,7 +110,7 @@ class ResponseFormatJsonSchemaObject(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
     description: Optional[str] = None
     name: Optional[str] = None
-    schema_: dict[str, Any] = Field(alias="schema")
+    json_schema: dict[str, Any] = Field(alias="schema")
     strict: Optional[bool] = Field(default=False)
 
 
@@ -194,7 +176,7 @@ class ToolChoiceFunction(BaseModel):
 def _normalize_tool_choice(tc: Any) -> Any:
     if tc is None:
         return None
-    # LangChain suele pasar "any" en with_structured_output()
+    # LangChain suele pasar "any" en with_structured_output
     if tc == "any":
         return "required"
     # Algunas capas podrían pasar {"type": "any"} (defensivo)
@@ -216,8 +198,7 @@ FunctionCall = Union[Literal["none", "auto"], FunctionCallName]
 
 class ChatPollinationsConfig(BaseModel):
     """
-    Request body para POST /v1/chat/completions (excepto `messages`).
-
+    Request body para POST /v1/chat/completions (excepto messages).
     Alineamiento con proveedor: evitar enviar campos a menos que esté configurado explícitamente.
     """
 
@@ -226,35 +207,26 @@ class ChatPollinationsConfig(BaseModel):
     model: Optional[TextModelId] = None
     modalities: Optional[list[Modality]] = None
     audio: Optional[AudioConfig] = None
-
     temperature: Optional[FloatTemperature] = None
     top_p: Optional[FloatTopP] = None
     max_tokens: Optional[Int0ToInt53] = None
     stop: Optional[Union[str, Annotated[list[str], Field(min_length=1, max_length=4)]]] = None
     seed: Optional[SeedInt] = None
-
     presence_penalty: Optional[FloatPenalty] = None
     frequency_penalty: Optional[FloatPenalty] = None
     repetition_penalty: Optional[FloatRepetitionPenalty] = None
     logit_bias: Optional[dict[str, BiasValue]] = None
-
     logprobs: Optional[bool] = None
     top_logprobs: Optional[TopLogprobsInt] = None
-
     stream: Optional[bool] = None
     stream_options: Optional[StreamOptions] = None
-
     response_format: Optional[ResponseFormat] = None
-
     tools: Optional[list[ToolDef]] = None
     tool_choice: Optional[ToolChoice] = None
     parallel_tool_calls: Optional[bool] = None
-
     user: Optional[str] = None
-
     functions: Optional[Annotated[list[FunctionDef], Field(min_length=1, max_length=128)]] = None
     function_call: Optional[FunctionCall] = None
-
     thinking: Optional[ThinkingConfig] = None
     reasoning_effort: Optional[ReasoningEffort] = None
     thinking_budget: Optional[Int0ToInt53] = None
@@ -266,12 +238,17 @@ class ChatPollinationsConfig(BaseModel):
 
 
 def _extract_text_from_content_blocks(obj: Any) -> str:
+    """
+    Extrae solo el texto de bloques tipo 'text', ignorando 'thinking', 'redacted_thinking', etc.
+    """
     if not isinstance(obj, list):
         return ""
+
     parts: list[str] = []
     for block in obj:
         if not isinstance(block, dict):
             continue
+        # Solo extraer bloques de texto puro (no thinking)
         if block.get("type") == "text":
             txt = block.get("text")
             if isinstance(txt, str) and txt:
@@ -294,11 +271,11 @@ def _usage_metadata_from_usage(usage: Any) -> UsageMetadata | None:
     except Exception:
         return None
 
-    md: UsageMetadata = {
-        "input_tokens": max(prompt_i, 0),
-        "output_tokens": max(completion_i, 0),
-        "total_tokens": max(total_i, 0),
-    }
+    md = UsageMetadata(
+        input_tokens=max(prompt_i, 0),
+        output_tokens=max(completion_i, 0),
+        total_tokens=max(total_i, 0),
+    )
 
     in_details = usage.get("prompt_tokens_details")
     out_details = usage.get("completion_tokens_details")
@@ -315,12 +292,15 @@ def _response_metadata_from_response(obj: dict[str, Any]) -> dict[str, Any]:
     for k in ("id", "model", "created", "system_fingerprint", "user_tier", "object"):
         if k in obj and obj[k] is not None:
             md[k] = obj[k]
+
     citations = obj.get("citations")
     if isinstance(citations, list):
         md["citations"] = citations
+
     prompt_filter_results = obj.get("prompt_filter_results")
     if prompt_filter_results is not None:
         md["prompt_filter_results"] = prompt_filter_results
+
     return md
 
 
@@ -330,24 +310,31 @@ def _message_content_from_message_dict(message: dict[str, Any]) -> Any:
     - message.content: str | list[part] | None
     - message.content_blocks: list[block] | None
     - message.audio.transcript: str
+
+    Robustecido para manejar ausencia de transcript.
     """
+    # Prioridad 1: content explícito
     if "content" in message and message.get("content") is not None:
         return message.get("content")
 
+    # Prioridad 2: content_blocks
     blocks = message.get("content_blocks")
     if isinstance(blocks, list) and blocks:
         return blocks
 
+    # Prioridad 3: audio.transcript (con fallback robusto)
     audio = message.get("audio")
     if isinstance(audio, dict):
         transcript = audio.get("transcript")
         if isinstance(transcript, str) and transcript:
             return transcript
 
+    # Fallback: string vacío en lugar de None para evitar errores downstream
     return ""
 
 
 def _delta_content_from_delta_dict(delta: dict[str, Any]) -> Any:
+    """Extrae contenido delta con prioridades similares."""
     if "content" in delta and delta.get("content") is not None:
         return delta.get("content")
 
@@ -366,8 +353,8 @@ def _delta_content_from_delta_dict(delta: dict[str, Any]) -> Any:
 
 def _text_from_any_content(content: Any) -> str:
     """
-    Usado solo para streaming de tokens.
-    Se mantienen tokens textuales en AIMessageChunk.content y se preservan partes estructuradas en additional_kwargs.
+    Usado solo para streaming de tokens. Se mantienen tokens textuales en AIMessageChunk.content
+    y se preservan partes estructuradas en additional_kwargs.
     """
     if isinstance(content, str):
         return content
@@ -385,7 +372,6 @@ def _tool_call_chunks_from_delta(delta: dict[str, Any]) -> list[ToolCallChunk]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-
         idx = item.get("index")
         fn = item.get("function")
         if not isinstance(idx, int) or not isinstance(fn, dict):
@@ -393,7 +379,6 @@ def _tool_call_chunks_from_delta(delta: dict[str, Any]) -> list[ToolCallChunk]:
 
         name = fn.get("name")
         args = fn.get("arguments")
-
         chunks.append(
             tool_call_chunk(
                 name=name if isinstance(name, str) else None,
@@ -402,35 +387,34 @@ def _tool_call_chunks_from_delta(delta: dict[str, Any]) -> list[ToolCallChunk]:
                 index=idx,
             )
         )
-
     return chunks
 
 
 def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
     """
-    SSE parser para respuestas streaming de httpx:
-    - Admite varias líneas "data:" por evento.
+    SSE parser para respuestas streaming de httpx.
+    - Admite varias líneas data: por evento.
     - Trata una línea en blanco como delimitador cuando está presente.
-    - Analiza cada línea "data:" como un evento (comportamiento común del proveedor).
+    - Analiza cada línea data: como un evento (comportamiento común del proveedor).
     """
     data_lines: list[str] = []
 
     def flush() -> Iterator[dict[str, Any]]:
         if not data_lines:
-            return iter(())
-        payload = "\n".join(data_lines).strip()
+            return iter([])
+        payload = "".join(data_lines).strip()
         data_lines.clear()
         if not payload:
-            return iter(())
+            return iter([])
         if payload == "[DONE]":
-            return iter(({"__done__": True},))
+            return iter([{"done": True}])
         try:
             obj = json.loads(payload)
         except Exception:
-            return iter(())
+            return iter([])
         if isinstance(obj, dict):
-            return iter((obj,))
-        return iter(())
+            return iter([obj])
+        return iter([])
 
     for raw_line in resp.iter_lines():
         if raw_line is None:
@@ -443,25 +427,24 @@ def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
         else:
             line = raw_line
 
-        if line == "":
+        if not line:
             yield from flush()
             continue
 
         if not line.startswith("data:"):
             continue
 
-        piece = line[len("data:") :].lstrip()
+        piece = line[len("data:"):].lstrip()
         if piece == "[DONE]":
-            yield {"__done__": True}
+            yield {"done": True}
             return
 
         # La mayoría de los proveedores envían un JSON por línea de datos; aun así, admitimos la unión.
         data_lines.append(piece)
         if len(data_lines) == 1:
             # Tratar de parsear líneas solas inmediatamente (ruta rápida).
-            # for evt in flush():
-            #     yield evt
-            yield from flush()
+            for evt in flush():
+                yield evt
 
     yield from flush()
 
@@ -472,12 +455,12 @@ async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]
     async def flush() -> list[dict[str, Any]]:
         if not data_lines:
             return []
-        payload = "\n".join(data_lines).strip()
+        payload = "".join(data_lines).strip()
         data_lines.clear()
         if not payload:
             return []
         if payload == "[DONE]":
-            return [{"__done__": True}]
+            return [{"done": True}]
         try:
             obj = json.loads(payload)
         except Exception:
@@ -485,7 +468,7 @@ async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]
         return [obj] if isinstance(obj, dict) else []
 
     async for line in resp.aiter_lines():
-        if line == "":
+        if not line:
             for evt in await flush():
                 yield evt
             continue
@@ -493,9 +476,9 @@ async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]
         if not line.startswith("data:"):
             continue
 
-        piece = line[len("data:") :].lstrip()
+        piece = line[len("data:"):].lstrip()
         if piece == "[DONE]":
-            yield {"__done__": True}
+            yield {"done": True}
             return
 
         data_lines.append(piece)
@@ -505,6 +488,7 @@ async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]
 
     for evt in await flush():
         yield evt
+
 
 def _parse_tool_calls(message: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     raw = message.get("tool_calls")
@@ -549,7 +533,7 @@ def _parse_tool_calls(message: dict[str, Any]) -> tuple[list[dict[str, Any]], li
 
 
 # ------------------------------------------------------------------------------------
-# Chat wrapper (alineado con LangChain v1.2.x, streaming real via .stream/.astream)
+# Chat wrapper alineado con LangChain v1.2.x, streaming real via .stream/.astream
 # ------------------------------------------------------------------------------------
 
 
@@ -632,7 +616,7 @@ class ChatPollinations(BaseChatModel):
         self,
         tools: Sequence[dict[str, Any] | type | Callable | BaseTool],  # type: ignore
         *,
-        tool_choice: str | None = None,  # ← Sin el "= ..."
+        tool_choice: str | None = None,
         parallel_tool_calls: bool | None = None,
         strict: bool | None = None,
         **kwargs: Any
@@ -678,16 +662,16 @@ class ChatPollinations(BaseChatModel):
                     out["function"] = fn
                 return out
 
-            # 2.2) Ruta preferida: convertidor oficial de LangChain (maneja BaseTool/StructuredTool/Pydantic/TypedDict)
+            # 2.2) Ruta preferida: convertidor oficial de LangChain maneja BaseTool/StructuredTool/Pydantic/TypedDict
             try:
-                from langchain_core.utils.function_calling import convert_to_openai_tool
+                from langchain_core.utils.function_calling import convert_to_openai_tool  # type: ignore
             except Exception:
                 convert_to_openai_tool = None  # type: ignore
 
             if convert_to_openai_tool is not None:
                 try:
                     converted = convert_to_openai_tool(t)
-                    # Puede venir como {"type":"function","function":{...}} o, según versión, como {"name":...,"parameters":...}
+                    # Puede venir como {"type":"function","function":...} o, según versión, como {"name":...,"parameters":...}
                     if isinstance(converted, dict):
                         if converted.get("type") == "function" and isinstance(converted.get("function"), dict):
                             out = converted
@@ -714,10 +698,9 @@ class ChatPollinations(BaseChatModel):
                     # si el convertidor falla por cualquier motivo, caemos a nuestras heurísticas
                     pass
 
-            # 2.3) Fallback: si es Pydantic model class o tipo (TypedDict/typing), intentamos schema via Pydantic
+            # 2.3) Fallback: si es Pydantic model class o tipo TypedDict/typing, intentamos schema via Pydantic
             name = getattr(t, "name", None) or getattr(t, "__name__", None) or "Tool"
             description = getattr(t, "description", None) or (getattr(t, "__doc__", "") or "").strip() or None
-
             parameters: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
 
             # Pydantic BaseModel subclass
@@ -725,7 +708,7 @@ class ChatPollinations(BaseChatModel):
                 if isinstance(t, type) and issubclass(t, BaseModel):
                     parameters = t.model_json_schema()
                 else:
-                    # TypedDict / typing schema vía TypeAdapter (Pydantic v2)
+                    # TypedDict / typing schema va TypeAdapter (Pydantic v2)
                     with contextlib.suppress(Exception):
                         parameters = TypeAdapter(t).json_schema()
             except Exception:
@@ -745,22 +728,20 @@ class ChatPollinations(BaseChatModel):
 
         openai_tools: list[dict[str, Any]] = [_convert_one_tool(t) for t in tools]
 
-        # 3) Validar tools contra nuestro Union Pydantic (ToolDef)
-        adapter_tool = TypeAdapter(ToolDef)  # type: ignore[var-annotated]
+        # 3) Validar tools contra nuestro Union Pydantic ToolDef
+        adapter_tool = TypeAdapter[ToolDef](ToolDef)  # type: ignore[var-annotated]
         tool_defs = [adapter_tool.validate_python(t) for t in openai_tools]
 
         # 4) Validar tool_choice normalizado contra ToolChoice (evita que quede "any" en request_defaults)
         if tool_choice_norm is not None:
-            adapter_choice = TypeAdapter(ToolChoice)  # type: ignore[var-annotated]
+            adapter_choice = TypeAdapter[ToolChoice](ToolChoice)  # type: ignore[var-annotated]
             tool_choice_norm = adapter_choice.validate_python(tool_choice_norm)
 
         # 5) Clonar request_defaults y devolver una nueva instancia (estilo LangChain bind)
         rd = self.request_defaults.model_copy(deep=True)
         rd.tools = tool_defs
-
         if tool_choice_norm is not None:
             rd.tool_choice = tool_choice_norm
-
         if parallel_tool_calls is not None:
             rd.parallel_tool_calls = parallel_tool_calls
 
@@ -773,20 +754,13 @@ class ChatPollinations(BaseChatModel):
             preserve_multimodal_deltas=self.preserve_multimodal_deltas,
         )
 
-    def _build_payload(
-        self,
-        messages: list[BaseMessage],
-        stop: list[str] | None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+    def _build_payload(self, messages: list[BaseMessage], stop: list[str] | None, **kwargs: Any) -> dict[str, Any]:
         """
         Construye el request payload.
-
         Importante: Ignora los kwargs ajenos al proveedor y que la capa Runnable pueda pasar.
-        (p.e., stream_mode=..., include_names=..., etc.)
+        (p.e., "stream_mode"..., "include_names"..., etc.)
         """
         payload: dict[str, Any] = {"messages": lc_messages_to_openai(messages)}
-
         payload.update(
             self.request_defaults.model_dump(
                 by_alias=True,
@@ -841,13 +815,15 @@ class ChatPollinations(BaseChatModel):
             for ch in choices:
                 if not isinstance(ch, dict):
                     continue
+
                 message = ch.get("message") or {}
                 if not isinstance(message, dict):
                     message = {}
 
                 content = _message_content_from_message_dict(message)
-
                 additional_kwargs: dict[str, Any] = {}
+
+                # Capturar metadatos extendidos de manera consistente
                 for k in ("tool_calls", "function_call", "audio", "reasoning_content", "content_blocks"):
                     if k in message and message[k] is not None:
                         additional_kwargs[k] = message[k]
@@ -881,10 +857,11 @@ class ChatPollinations(BaseChatModel):
 
         # Mantener llm_output al mínimo para evitar sobrecargar la propagación de response_metadata.
         llm_output: dict[str, Any] = {
-            "model_name": data.get("model") or (self.request_defaults.model or ""),
+            "model_name": data.get("model") or self.request_defaults.model or "",
             "system_fingerprint": data.get("system_fingerprint"),
             "token_usage": data.get("usage"),
         }
+
         return ChatResult(generations=generations, llm_output=llm_output)
 
     def _generate(
@@ -935,22 +912,21 @@ class ChatPollinations(BaseChatModel):
         def emit_final_usage_once() -> Iterator[ChatGenerationChunk]:
             nonlocal emitted_final_usage
             if emitted_final_usage:
-                return iter(())
+                return iter([])
             if pending_usage_md is None:
-                return iter(())
+                return iter([])
             emitted_final_usage = True
             msg_chunk = AIMessageChunk(
                 content="",
                 response_metadata=pending_usage_response_md or {},
                 usage_metadata=pending_usage_md,
             )
-            return iter((ChatGenerationChunk(message=msg_chunk, generation_info={"usage": True}),))
+            return iter([ChatGenerationChunk(message=msg_chunk, generation_info={"usage": True})])
 
         with self._http.stream_post_json(CHAT_COMPLETIONS_PATH, payload) as r:
             self._http.raise_for_status(r)
-
             for evt in _iter_sse_json_events_sync(r):
-                if evt.get("__done__") is True:
+                if evt.get("done") is True:
                     break
 
                 # Monitorear el uso más reciente, pero sin adjuntarlo a chunks normales (evitar el conteo doble).
@@ -961,8 +937,8 @@ class ChatPollinations(BaseChatModel):
                         pending_usage_response_md = _response_metadata_from_response(evt)
 
                 response_metadata = _response_metadata_from_response(evt)
-
                 choices = evt.get("choices") or []
+
                 if not isinstance(choices, list) or not choices:
                     # Algunos proveedores pueden transmitir eventos de solo uso; ignorarlos aquí para evitar duplicados.
                     continue
@@ -978,14 +954,16 @@ class ChatPollinations(BaseChatModel):
 
                 delta_content = _delta_content_from_delta_dict(delta)
                 text = _text_from_any_content(delta_content)
-
                 tool_call_chunks = _tool_call_chunks_from_delta(delta)
 
                 additional_kwargs: dict[str, Any] = {}
+
+                # CORRECCIÓN: Usar content_blocks consistentemente (no content_parts)
                 # Preservar contenido estructurado para consumidores multimodales sin interrumpir el stream.
                 if self.preserve_multimodal_deltas and isinstance(delta_content, list):
-                    additional_kwargs["content_parts"] = delta_content
+                    additional_kwargs["content_blocks"] = delta_content
 
+                # Capturar otros metadatos extendidos
                 for k in ("tool_calls", "function_call", "audio", "reasoning_content", "content_blocks"):
                     if k in delta and delta[k] is not None:
                         additional_kwargs[k] = delta[k]
@@ -1010,8 +988,8 @@ class ChatPollinations(BaseChatModel):
 
                 yield ChatGenerationChunk(message=msg_chunk, generation_info=gen_info or None)
 
-            # Emitir uso exactamente una vez al final.
-            yield from emit_final_usage_once()
+        # Emitir uso exactamente una vez al final.
+        yield from emit_final_usage_once()
 
     async def _astream(
         self,
@@ -1036,7 +1014,7 @@ class ChatPollinations(BaseChatModel):
         pending_usage_response_md: dict[str, Any] | None = None
         emitted_final_usage = False
 
-        async def emit_final_usage_once() -> None:
+        async def emit_final_usage_once() -> AsyncIterator[ChatGenerationChunk]:
             nonlocal emitted_final_usage
             if emitted_final_usage or pending_usage_md is None:
                 return
@@ -1046,16 +1024,12 @@ class ChatPollinations(BaseChatModel):
                 response_metadata=pending_usage_response_md or {},
                 usage_metadata=pending_usage_md,
             )
-            yield_chunk = ChatGenerationChunk(message=msg_chunk, generation_info={"usage": True})
-            # Utilizar un truco de generador asíncrono: el caller espera los yields de esta función.
-            # Esta función solo se llama al final; el yield retorna un solo elemento vía outer scope.
-            return yield_chunk  # type: ignore[return-value]
+            yield ChatGenerationChunk(message=msg_chunk, generation_info={"usage": True})
 
         async with self._http.astream_post_json(CHAT_COMPLETIONS_PATH, payload) as r:
             self._http.raise_for_status(r)
-
             async for evt in _iter_sse_json_events_async(r):
-                if evt.get("__done__") is True:
+                if evt.get("done") is True:
                     break
 
                 if "usage" in evt and evt.get("usage") is not None:
@@ -1065,8 +1039,8 @@ class ChatPollinations(BaseChatModel):
                         pending_usage_response_md = _response_metadata_from_response(evt)
 
                 response_metadata = _response_metadata_from_response(evt)
-
                 choices = evt.get("choices") or []
+
                 if not isinstance(choices, list) or not choices:
                     continue
 
@@ -1080,12 +1054,13 @@ class ChatPollinations(BaseChatModel):
 
                 delta_content = _delta_content_from_delta_dict(delta)
                 text = _text_from_any_content(delta_content)
-
                 tool_call_chunks = _tool_call_chunks_from_delta(delta)
 
                 additional_kwargs: dict[str, Any] = {}
+
+                # CORRECCIÓN: Usar content_blocks consistentemente
                 if self.preserve_multimodal_deltas and isinstance(delta_content, list):
-                    additional_kwargs["content_parts"] = delta_content
+                    additional_kwargs["content_blocks"] = delta_content
 
                 for k in ("tool_calls", "function_call", "audio", "reasoning_content", "content_blocks"):
                     if k in delta and delta[k] is not None:
@@ -1096,7 +1071,7 @@ class ChatPollinations(BaseChatModel):
                     additional_kwargs=additional_kwargs,
                     tool_call_chunks=tool_call_chunks,
                     response_metadata=response_metadata,
-                    usage_metadata=None,  # importante: evitar suma de uso repetida durante la agregación del chunk
+                    usage_metadata=None,
                 )
 
                 gen_info: dict[str, Any] = {}
@@ -1111,11 +1086,6 @@ class ChatPollinations(BaseChatModel):
 
                 yield ChatGenerationChunk(message=msg_chunk, generation_info=gen_info or None)
 
-            if not emitted_final_usage and pending_usage_md is not None:
-                emitted_final_usage = True
-                msg_chunk = AIMessageChunk(
-                    content="",
-                    response_metadata=pending_usage_response_md or {},
-                    usage_metadata=pending_usage_md,
-                )
-                yield ChatGenerationChunk(message=msg_chunk, generation_info={"usage": True})
+        # Emitir uso al final
+        async for usage_chunk in emit_final_usage_once():
+            yield usage_chunk

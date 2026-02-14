@@ -9,8 +9,7 @@ data = img.generate(
     params={
         "model": "klein-large",
         "width": 1024,
-        "height": 1024,
-        "seed": 42,
+        "height": 576,
         "enhance": True,
         "safe": True,
         "quality": "high",

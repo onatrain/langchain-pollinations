@@ -2,7 +2,7 @@ import dotenv
 
 from langchain_core.messages import HumanMessage
 
-from examples.utils import convert_to_json
+from utils import convert_to_json
 from langchain_pollinations import ChatPollinations
 
 dotenv.load_dotenv()

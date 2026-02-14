@@ -15,7 +15,7 @@ from langchain_pollinations._openai_compat import (
     _extract_text_from_parts,
     lc_messages_to_openai,
     tool_to_openai_tool,
-    safe_json_loads,
+    _safe_json_loads,
 )
 
 
@@ -793,7 +793,7 @@ def test_tool_to_openai_tool_with_langchain_converter():
 def test_safe_json_loads_valid_json():
     """Test con JSON válido"""
     json_str = '{"key": "value", "number": 42}'
-    result = safe_json_loads(json_str)
+    result = _safe_json_loads(json_str)
 
     assert result == {"key": "value", "number": 42}
 
@@ -801,7 +801,7 @@ def test_safe_json_loads_valid_json():
 def test_safe_json_loads_valid_array():
     """Test con array JSON válido"""
     json_str = '[1, 2, 3, "four"]'
-    result = safe_json_loads(json_str)
+    result = _safe_json_loads(json_str)
 
     assert result == [1, 2, 3, "four"]
 
@@ -809,14 +809,14 @@ def test_safe_json_loads_valid_array():
 def test_safe_json_loads_invalid_json():
     """Test con JSON inválido devuelve el string original"""
     json_str = '{invalid json}'
-    result = safe_json_loads(json_str)
+    result = _safe_json_loads(json_str)
 
     assert result == '{invalid json}'
 
 
 def test_safe_json_loads_empty_string():
     """Test con string vacío"""
-    result = safe_json_loads('')
+    result = _safe_json_loads('')
 
     assert result == ''
 
@@ -824,7 +824,7 @@ def test_safe_json_loads_empty_string():
 def test_safe_json_loads_malformed_json():
     """Test con JSON mal formado"""
     json_str = '{"key": "value", "missing": }'
-    result = safe_json_loads(json_str)
+    result = _safe_json_loads(json_str)
 
     assert result == json_str
 
@@ -832,7 +832,7 @@ def test_safe_json_loads_malformed_json():
 def test_safe_json_loads_partial_json():
     """Test con JSON parcial"""
     json_str = '{"incomplete":'
-    result = safe_json_loads(json_str)
+    result = _safe_json_loads(json_str)
 
     assert result == json_str
 

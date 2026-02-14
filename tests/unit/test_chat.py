@@ -222,13 +222,18 @@ def test_response_format_json_schema():
     schema_obj = ResponseFormatJsonSchemaObject(
         name="TestSchema",
         description="Test schema",
-        schema_={"type": "object", "properties": {"name": {"type": "string"}}},
+        schema={"type": "object", "properties": {"name": {"type": "string"}}},
         strict=True
     )
     fmt = ResponseFormatJsonSchema(type="json_schema", json_schema=schema_obj)
     assert fmt.type == "json_schema"
     assert fmt.json_schema.name == "TestSchema"
     assert fmt.json_schema.strict is True
+    # Verificar que el alias funciona en la serialización
+    dumped = schema_obj.model_dump(by_alias=True)
+    assert "schema" in dumped
+    assert dumped["schema"]["type"] == "object"
+
 
 
 def test_tool_function():
@@ -551,7 +556,7 @@ def test_iter_sse_json_events_sync_simple():
 
     assert len(events) == 2
     assert events[0] == {"message": "hello"}
-    assert events[1] == {"__done__": True}
+    assert events[1] == {"done": True}
 
 
 def test_iter_sse_json_events_sync_with_blanks():
@@ -584,7 +589,7 @@ async def test_iter_sse_json_events_async_simple():
 
     assert len(events) == 2
     assert events[0] == {"message": "async"}
-    assert events[1] == {"__done__": True}
+    assert events[1] == {"done": True}
 
 
 def test_chat_pollinations_initialization_defaults():
@@ -921,8 +926,8 @@ def test_chat_pollinations_preserve_multimodal_deltas():
 
     chunks = list(chat._stream(messages))
 
-    # Verificar que content_parts está en additional_kwargs
-    assert any("content_parts" in chunk.message.additional_kwargs for chunk in chunks)
+    # Verificar que content_blocks está en additional_kwargs
+    assert any("content_blocks" in chunk.message.additional_kwargs for chunk in chunks)
 
 
 def test_chat_pollinations_tools_with_parallel_calls():
@@ -1163,7 +1168,7 @@ def test_iter_sse_json_events_sync_invalid_json():
     resp = MockResponse()
     events = list(_iter_sse_json_events_sync(resp))
     # Solo debe procesar el JSON válido
-    valid_events = [e for e in events if not e.get("__done__")]
+    valid_events = [e for e in events if not e.get("done")]
     assert len(valid_events) == 1
     assert valid_events[0]["valid"] is True
 
@@ -1195,8 +1200,8 @@ def test_iter_sse_json_events_sync_non_dict_json():
 
     resp = MockResponse()
     events = list(_iter_sse_json_events_sync(resp))
-    # Solo eventos __done__
-    assert all(e.get("__done__") for e in events)
+    # Solo eventos done
+    assert all(e.get("done") for e in events)
 
 
 @pytest.mark.asyncio
@@ -1213,7 +1218,7 @@ async def test_iter_sse_json_events_async_invalid_json():
     async for evt in _iter_sse_json_events_async(resp):
         events.append(evt)
 
-    valid_events = [e for e in events if not e.get("__done__")]
+    valid_events = [e for e in events if not e.get("done")]
     assert len(valid_events) == 1
 
 
@@ -1415,9 +1420,12 @@ def test_chat_pollinations_stream_with_multimodal_content():
 
     chunks = list(chat._stream(messages))
 
-    # Verificar que content_parts está preservado
-    parts_chunks = [c for c in chunks if "content_parts" in c.message.additional_kwargs]
-    assert len(parts_chunks) > 0
+    # Verificar que content_blocks está preservado
+    blocks_chunks = [c for c in chunks if "content_blocks" in c.message.additional_kwargs]
+    assert len(blocks_chunks) > 0
+    # Verificar que el primer chunk tiene los bloques multimodales
+    assert isinstance(blocks_chunks[0].message.additional_kwargs["content_blocks"], list)
+    assert len(blocks_chunks[0].message.additional_kwargs["content_blocks"]) == 2
 
 
 def test_chat_pollinations_stream_with_additional_delta_fields():

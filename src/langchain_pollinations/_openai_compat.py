@@ -1,12 +1,81 @@
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any, Literal, TypedDict, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 # Formatos permitidos por api.json para input_audio.format
 _ALLOWED_AUDIO_FORMATS = {"wav", "mp3", "flac", "opus", "pcm16"}
+
+
+# ============================================================================
+# TypedDicts para estructuras de respuesta (mejorar Type Safety)
+# ============================================================================
+
+
+class AudioTranscript(TypedDict, total=False):
+    """Audio output structure from chat completions."""
+    transcript: str
+    data: str
+    id: str
+    expires_at: int
+
+
+class ContentBlockText(TypedDict):
+    """Text content block."""
+    type: Literal["text"]
+    text: str
+
+
+class ContentBlockImageUrl(TypedDict):
+    """Image URL content block."""
+    type: Literal["image_url"]
+    image_url: dict[str, Any]  # {url: str, detail?: str, mime_type?: str}
+
+
+class ContentBlockThinking(TypedDict):
+    """Thinking/reasoning block (exposed by models like Claude, o1)."""
+    type: Literal["thinking"]
+    thinking: str
+
+
+class ContentBlockRedactedThinking(TypedDict):
+    """Redacted thinking block."""
+    type: Literal["redacted_thinking"]
+    data: str
+
+
+ContentBlock = ContentBlockText | ContentBlockImageUrl | ContentBlockThinking | ContentBlockRedactedThinking | dict[str, Any]
+
+
+class ContentFilterDetail(TypedDict):
+    """Detail for a specific filter category."""
+    filtered: bool
+    severity: Literal["safe", "low", "medium", "high"] | None
+    detected: bool | None
+
+
+class ContentFilterResult(TypedDict, total=False):
+    """Content filter results from the API."""
+    hate: ContentFilterDetail
+    self_harm: ContentFilterDetail
+    sexual: ContentFilterDetail
+    violence: ContentFilterDetail
+    jailbreak: ContentFilterDetail
+    protected_material_text: ContentFilterDetail
+    protected_material_code: ContentFilterDetail
+
+
+class PromptFilterResultItem(TypedDict):
+    """Prompt filter result for a specific prompt index."""
+    prompt_index: int
+    content_filter_results: ContentFilterResult
+
+
+# ============================================================================
+# Conversión de LangChain messages a formato OpenAI/Pollinations
+# ============================================================================
 
 
 def _lc_tool_call_to_openai_tool_call(tc: Any) -> dict[str, Any]:
@@ -155,7 +224,7 @@ def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
         data = ""
 
     if not (isinstance(fmt, str) and fmt in _ALLOWED_AUDIO_FORMATS):
-        # si no podemos inferir, mp3 es el caso más común (y tu ejemplo es mp3)
+        # si no podemos inferir, mp3 es el caso más común
         fmt = "mp3"
 
     out = dict(part)
@@ -228,7 +297,14 @@ def _normalize_message_content(content: Any) -> Any:
     return _to_jsonable(content)
 
 
-def _extract_text_from_parts(content: Any) -> str:
+def _extract_text_from_parts(content: Any, *, exclude_thinking: bool = False) -> str:
+    """
+    Extrae texto de content parts.
+
+    Args:
+        content: Content (string o lista de parts)
+        exclude_thinking: Si es True, excluye bloques de tipo 'thinking' y 'redacted_thinking'
+    """
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -239,8 +315,14 @@ def _extract_text_from_parts(content: Any) -> str:
         if isinstance(p, str):
             chunks.append(p)
         elif isinstance(p, dict):
+            part_type = p.get("type")
+
+            # Excluir bloques de thinking si se solicita
+            if exclude_thinking and part_type in ("thinking", "redacted_thinking"):
+                continue
+
             # soporta tanto {type:text,text:...} como variantes
-            if p.get("type") == "text" and isinstance(p.get("text"), str):
+            if part_type == "text" and isinstance(p.get("text"), str):
                 chunks.append(p["text"])
             elif isinstance(p.get("content"), str):
                 chunks.append(p["content"])
@@ -349,7 +431,7 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
 
     # 1) Mejor ruta: convertidor oficial de LangChain (maneja más casos que nuestras heurísticas)
     try:
-        from langchain_core.utils.function_calling import convert_to_openai_tool as _lc_convert
+        from langchain_core.utils.function_calling import convert_to_openai_tool as _lc_convert  # type: ignore
     except Exception:
         _lc_convert = None  # type: ignore
 
@@ -357,13 +439,13 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
         try:
             converted = _lc_convert(tool)
             if isinstance(converted, dict):
-                # Caso A: ya viene como {"type":"function","function":{...}}  no hace falta cast(dict[str, Any])
+                # Caso A: ya viene como {"type":"function","function":{...}}
                 if converted.get("type") == "function" and isinstance(converted.get("function"), dict):
                     fn = converted.get("function") or {}
                     params = fn.get("parameters")
                     # Si el schema quedó vacío, seguimos intentando inferirlo abajo
                     if not _is_schema_empty(params):
-                        return converted
+                        return cast(dict[str, Any], converted)
 
                 # Caso B: algunas versiones devuelven {"name","description","parameters"}
                 if "name" in converted and "parameters" in converted and isinstance(converted.get("name"), str):
@@ -426,14 +508,13 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
     # 2.4) Pydantic model class (BaseModel)
     if _is_schema_empty(parameters):
         try:
-            from pydantic import BaseModel
+            from pydantic import BaseModel  # type: ignore
         except Exception:
             BaseModel = None  # type: ignore
 
         try:
-            if BaseModel is not None and isinstance(tool, type) and issubclass(tool, BaseModel):
-                # candidate = cast(dict[str, Any], tool.model_json_schema())
-                candidate = tool.model_json_schema()
+            if BaseModel is not None and isinstance(tool, type) and issubclass(tool, BaseModel):  # type: ignore[arg-type]
+                candidate = cast(dict[str, Any], tool.model_json_schema())  # type: ignore[attr-defined]
                 if not _is_schema_empty(candidate):
                     parameters = candidate
         except Exception:
@@ -442,14 +523,13 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
     # 2.5) TypedDict / typing types via TypeAdapter (Pydantic v2)
     if _is_schema_empty(parameters):
         try:
-            from pydantic import TypeAdapter
+            from pydantic import TypeAdapter  # type: ignore
         except Exception:
             TypeAdapter = None  # type: ignore
 
         if TypeAdapter is not None:
             try:
-                # candidate = cast(dict[str, Any], TypeAdapter(tool).json_schema())
-                candidate = TypeAdapter(tool).json_schema()
+                candidate = cast(dict[str, Any], TypeAdapter(tool).json_schema())  # type: ignore[misc]
                 if not _is_schema_empty(candidate):
                     parameters = candidate
             except Exception:
@@ -458,7 +538,7 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
     return _wrap_as_function(name=str(name), description=cast(str | None, description), parameters=parameters)
 
 
-def safe_json_loads(s: str) -> Any:
+def _safe_json_loads(s: str) -> Any:
     try:
         return json.loads(s)
     except Exception:
