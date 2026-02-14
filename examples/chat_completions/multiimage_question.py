@@ -9,11 +9,11 @@ frame_urls = [
     "https://i.ibb.co/gFrRgLQd/doki2.jpg",
 ]
 
-content = [{"type": "text", "text": "Estas imágenes son frames de un video. Inventa una historia que describa los cambios entre frames."}]
+content = [{"type": "text", "text": "Inventa una historia con el personaje de las fotos y sus acciones."}]
 content += [{"type": "image_url", "image_url": {"url": u}} for u in frame_urls]
 
 m = ChatPollinations(
-    model="openai",
+    model="openai-large",
 )
 
 res = m.invoke([HumanMessage(content=content)])

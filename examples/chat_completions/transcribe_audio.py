@@ -5,7 +5,7 @@ from utils import encode_to_base64
 
 dotenv.load_dotenv()
 
-audio_b64 = encode_to_base64("/home/al/Imágenes/marycorto.mp3")
+audio_b64 = encode_to_base64("audio.mp3")
 
 m = ChatPollinations(
     model="openai-audio",

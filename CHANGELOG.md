@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### [0.2.1] - 2026-02-14
+
+#### Fixed
+- Handling potential empty responses in AIMessage.content
+
+#### Added
+- Integration tests for multimodal use of ChatPollinations class
+
 ### [0.2.0] - 2026-02-14
 
 #### Added
 - PollinAPI updates: new models.
-
-#### Added
 - PollinAPI updates: add support to response content_blocks.
 
 ### [0.1.7] - 2026-02-13

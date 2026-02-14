@@ -304,6 +304,7 @@ def _response_metadata_from_response(obj: dict[str, Any]) -> dict[str, Any]:
     return md
 
 
+'''
 def _message_content_from_message_dict(message: dict[str, Any]) -> Any:
     """
     Conservar las formas multimodales cuando estén presentes:
@@ -331,8 +332,46 @@ def _message_content_from_message_dict(message: dict[str, Any]) -> Any:
 
     # Fallback: string vacío en lugar de None para evitar errores downstream
     return ""
+'''
+
+def _message_content_from_message_dict(message: dict[str, Any]) -> Any:
+    """
+    Conservar las formas multimodales cuando estén presentes:
+    - message.content: str | list[part] | None
+    - message.content_blocks: list[block] | None
+    - message.audio.transcript: str
+
+    Robustecido para manejar ausencia de transcript y preferir bloques sobre string vacío.
+    """
+    raw_content = message.get("content")
+
+    # 1. Si content es lista o string con texto, usarlo.
+    if isinstance(raw_content, list) and raw_content:
+        return raw_content
+    if isinstance(raw_content, str) and raw_content:
+        return raw_content
+
+    # 2. Si content está vacío/nulo, buscar content_blocks (thinking, imágenes, etc.)
+    blocks = message.get("content_blocks")
+    if isinstance(blocks, list) and blocks:
+        return blocks
+
+    # 3. Audio transcript
+    audio = message.get("audio")
+    if isinstance(audio, dict):
+        transcript = audio.get("transcript")
+        if isinstance(transcript, str) and transcript:
+            return transcript
+
+    # 4. Si llegamos aquí, realmente es vacío.
+    # Pero si había un raw_content string vacío (ej. ""), lo devolvemos para fidelidad.
+    if raw_content is not None:
+        return raw_content
+
+    return ""
 
 
+'''
 def _delta_content_from_delta_dict(delta: dict[str, Any]) -> Any:
     """Extrae contenido delta con prioridades similares."""
     if "content" in delta and delta.get("content") is not None:
@@ -342,6 +381,35 @@ def _delta_content_from_delta_dict(delta: dict[str, Any]) -> Any:
     if isinstance(blocks, list) and blocks:
         return blocks
 
+    audio = delta.get("audio")
+    if isinstance(audio, dict):
+        transcript = audio.get("transcript")
+        if isinstance(transcript, str) and transcript:
+            return transcript
+
+    return ""
+'''
+
+def _delta_content_from_delta_dict(delta: dict[str, Any]) -> Any:
+    """Extrae contenido delta con prioridades similares."""
+    raw_content = delta.get("content")
+
+    # 1. Si content es string con texto, usarlo
+    if isinstance(raw_content, str) and raw_content:
+        return raw_content
+
+    # 2. Si content es lista (multimodal), usarla
+    if isinstance(raw_content, list) and raw_content:
+        return raw_content
+
+    # 3. Buscar content_blocks como alternativa
+    # Nota: en streaming, content suele venir chunk a chunk.
+    # Si viene content_blocks (raro en delta standard, pero posible en pollinations), lo usamos.
+    blocks = delta.get("content_blocks")
+    if isinstance(blocks, list) and blocks:
+        return blocks
+
+    # 4. Audio transcript
     audio = delta.get("audio")
     if isinstance(audio, dict):
         transcript = audio.get("transcript")
