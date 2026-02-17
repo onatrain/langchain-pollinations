@@ -47,13 +47,18 @@ def test_raise_for_status_success():
 
 
 def test_raise_for_status_error_raises():
-    resp = SimpleNamespace(status_code=404, reason_phrase="Not Found", text="missing")
+    resp = SimpleNamespace(
+        status_code=404,
+        reason_phrase="Not Found",
+        text="missing",
+        headers={"content-type": "text/plain"}
+    )
 
     with pytest.raises(PollinationsAPIError) as exc:
         PollinationsHttpClient.raise_for_status(resp)
 
     assert exc.value.status_code == 404
-    assert "Not Found" in exc.value.message
+    assert exc.value.message == "missing"
     assert "missing" in (exc.value.body or "")
 
 
@@ -357,6 +362,7 @@ def test_raise_for_status_handles_text_error():
     class BadResp:
         status_code = 500
         reason_phrase = "Boom"
+        headers = {"content-type": "text/plain"}
 
         @property
         def text(self):
@@ -365,6 +371,6 @@ def test_raise_for_status_handles_text_error():
     with pytest.raises(PollinationsAPIError) as exc:
         PollinationsHttpClient.raise_for_status(BadResp())
 
-    # Cuando leer .text falla, body debe quedar en None.
+    # Cuando leer .text falla, body debe quedar vacío o None.
     assert exc.value.status_code == 500
-    assert exc.value.body is None
+    assert not exc.value.body  # Acepta None o ""

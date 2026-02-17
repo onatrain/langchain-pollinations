@@ -693,7 +693,7 @@ def test_http_error_propagates(account):
     from langchain_pollinations._errors import PollinationsAPIError
 
     account._http.get = Mock(side_effect=PollinationsAPIError(
-        status_code=401,
+        401,
         message="Unauthorized"
     ))
 
@@ -707,7 +707,7 @@ async def test_async_http_error_propagates(account):
     from langchain_pollinations._errors import PollinationsAPIError
 
     account._http.aget = AsyncMock(side_effect=PollinationsAPIError(
-        status_code=403,
+        403,
         message="Forbidden"
     ))
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -14,6 +15,112 @@ from langchain_pollinations._errors import PollinationsAPIError
 class HttpConfig:
     base_url: str
     timeout_s: float = 120.0
+
+
+def _parse_error_response(
+    status_code: int,
+    body_text: str,
+    content_type: str,
+) -> PollinationsAPIError:
+    """
+    Parsea una respuesta de error del API según spec.
+
+    Si el body no es JSON o no matchea el schema esperado,
+    retorna PollinationsAPIError con campos estructurados en None.
+    """
+    message = "HTTP error"
+    error_code: str | None = None
+    request_id: str | None = None
+    timestamp: str | None = None
+    details: dict[str, Any] | None = None
+    cause: Any | None = None
+
+    # Solo parsear JSON si Content-Type lo indica
+    if "application/json" not in content_type.lower():
+        if body_text and body_text.strip():
+            message = body_text
+        return PollinationsAPIError(
+            status_code=status_code,
+            message=message,
+            body=body_text,
+            error_code=error_code,
+            request_id=request_id,
+            timestamp=timestamp,
+            details=details,
+            cause=cause,
+        )
+
+    # Intentar parsear JSON
+    try:
+        data = json.loads(body_text) if body_text else {}
+    except (json.JSONDecodeError, ValueError):
+        if body_text and body_text.strip():
+            message = body_text
+        return PollinationsAPIError(
+            status_code=status_code,
+            message=message,
+            body=body_text,
+            error_code=error_code,
+            request_id=request_id,
+            timestamp=timestamp,
+            details=details,
+            cause=cause,
+        )
+
+    if not isinstance(data, dict):
+        return PollinationsAPIError(
+            status_code=status_code,
+            message=str(data) if data else message,
+            body=body_text,
+            error_code=error_code,
+            request_id=request_id,
+            timestamp=timestamp,
+            details=details,
+            cause=cause,
+        )
+
+    # Extraer campos del envelope: { "status": ..., "success": false, "error": {...} }
+    error_obj = data.get("error")
+
+    if isinstance(error_obj, dict):
+        error_code = error_obj.get("code")
+        if isinstance(error_code, str):
+            error_code = error_code.strip()
+        else:
+            error_code = None
+
+        msg = error_obj.get("message")
+        if isinstance(msg, str) and msg.strip():
+            message = msg.strip()
+
+        req_id = error_obj.get("requestId")
+        if isinstance(req_id, str) and req_id.strip():
+            request_id = req_id.strip()
+
+        ts = error_obj.get("timestamp")
+        if isinstance(ts, str) and ts.strip():
+            timestamp = ts.strip()
+
+        det = error_obj.get("details")
+        if isinstance(det, dict):
+            details = det
+
+        cause = error_obj.get("cause")
+    else:
+        msg = data.get("message")
+        if isinstance(msg, str) and msg.strip():
+            message = msg.strip()
+
+    return PollinationsAPIError(
+        status_code=status_code,
+        message=message,
+        body=body_text,
+        error_code=error_code,
+        request_id=request_id,
+        timestamp=timestamp,
+        details=details,
+        cause=cause,
+    )
 
 
 class PollinationsHttpClient:
@@ -106,18 +213,25 @@ class PollinationsHttpClient:
 
     @staticmethod
     def raise_for_status(resp: httpx.Response) -> None:
+        """Verifica status y levanta PollinationsAPIError estructurado."""
         if 200 <= resp.status_code < 300:
             return
-        body = None
+
+        body_text: str | None = None
         try:
-            body = resp.text
+            body_text = resp.text
         except Exception:
-            body = None
-        raise PollinationsAPIError(
+            body_text = None
+
+        content_type = resp.headers.get("content-type", "")
+
+        error = _parse_error_response(
             status_code=resp.status_code,
-            message=resp.reason_phrase or "HTTP error",
-            body=body,
+            body_text=body_text or "",
+            content_type=content_type,
         )
+
+        raise error
 
     def post_json(self, path: str, payload: dict[str, Any], *, stream: bool = False) -> httpx.Response:
         url = f"{self._config.base_url}{path}"

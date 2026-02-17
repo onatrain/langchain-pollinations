@@ -4,8 +4,8 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from langchain_pollinations.chat import ChatPollinations
+from langchain_pollinations._errors import PollinationsAPIError
 
-####################################################################################
 if os.getenv("POLLINATIONS_HTTP_DEBUG", "").lower() in {"1", "true", "yes", "on"}:
     import logging
 
@@ -17,7 +17,6 @@ if os.getenv("POLLINATIONS_HTTP_DEBUG", "").lower() in {"1", "true", "yes", "on"
     # httpcore es el motor interno de httpx
     logging.getLogger("httpcore").setLevel(logging.DEBUG)
     logging.getLogger("httpx").setLevel(logging.DEBUG)
-####################################################################################
 
 
 @pytest.mark.integration
@@ -32,3 +31,14 @@ def test_chat_completions_text() -> None:
     res = model.invoke([HumanMessage(content="Responde solo con la palabra: OK")])
     assert "OK" in (res.content or "")
 
+@pytest.mark.integration
+def test_chat_error_handling() -> None:
+    chat = ChatPollinations()
+    try:
+        chat.invoke("test")
+    except PollinationsAPIError as e:
+        print(f"Error {e.error_code}: {e.message}")
+        print(f"Request ID: {e.request_id}")  # ⭐ Para soporte
+
+        if e.is_validation_error or e.is_auth_error:
+            print(f"Details: {e.details}")

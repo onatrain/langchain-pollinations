@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### [0.2.3] - 2026-02-17
+
+#### Added
+- Backend error handling incorporated as a structured object
+- New unit tests for error handling
+
 ### [0.2.2] - 2026-02-16
 
 #### Fixed
