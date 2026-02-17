@@ -4,12 +4,14 @@ from langchain_pollinations.account import AccountInformation
 from langchain_pollinations.chat import ChatPollinations
 from langchain_pollinations.image import ImagePollinations
 from langchain_pollinations.models import ModelInformation
+from langchain_pollinations._errors import PollinationsAPIError
 
 __all__ = [
+    "AccountInformation",
     "ChatPollinations",
     "ImagePollinations",
-    "AccountInformation",
     "ModelInformation",
+    "PollinationsAPIError",
 ]
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"

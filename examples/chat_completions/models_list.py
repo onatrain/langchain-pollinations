@@ -8,7 +8,7 @@ dotenv.load_dotenv()
 
 mi = ModelInformation()
 print("Modelos de texto compatibles con OpenAI:")
-print(convert_to_json(mi.list_v1_models()))      # OpenAI-compatible (/v1/models)
+print(convert_to_json(mi.list_compatible_models()))      # OpenAI-compatible (/v1/models)
 print("\nTodos los modelos de texto:")
 print(convert_to_json(mi.list_text_models()))    # (/text/models)
 print("\nTodos los modelos de imagen:")
