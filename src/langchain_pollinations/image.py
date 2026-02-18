@@ -1,3 +1,8 @@
+"""
+This module provides the ImagePollinations class and associated utilities.
+It facilitates image and video generation through the Pollinations.ai API.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal, Optional
@@ -40,7 +45,8 @@ Quality = Literal["low", "medium", "high", "hd"]
 
 class ImagePromptParams(BaseModel):
     """
-    Query params oficiales de GET /image/{prompt} según api.json.
+    Data structure representing the official query parameters for image generation.
+    Includes configuration for model, dimensions, seed, and model-specific options.
     """
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -74,16 +80,19 @@ class ImagePromptParams(BaseModel):
     audio: bool = False
 
     def to_query(self) -> dict[str, Any]:
+        """
+        Convert the parameter model into a dictionary suitable for URL query strings.
+
+        Returns:
+            A dictionary containing active parameters with appropriate aliases.
+        """
         return self.model_dump(by_alias=True, exclude_none=True)
 
 
 class ImagePollinations(BaseModel):
     """
-    Wrapper configurable para GET /image/{prompt}.
-
-    - Estilo "ChatOpenAI": acepta parámetros de request en el constructor.
-    - Integra bien en LangChain: generate/agenerate + invoke/ainvoke + with_params().
-    - Retorna bytes (imagen o video).
+    Configurable wrapper for the Pollinations image generation endpoint.
+    Supports both synchronous and asynchronous operations with LangChain integration.
     """
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", populate_by_name=True)
 
@@ -110,6 +119,12 @@ class ImagePollinations(BaseModel):
     _http: PollinationsHttpClient = PrivateAttr()
 
     def __init__(self, **data: Any) -> None:
+        """
+        Initialize the image client with provided configuration and credentials.
+
+        Args:
+            **data: Configuration parameters including api_key, base_url, and defaults.
+        """
         super().__init__(**data)
         auth = AuthConfig.from_env_or_value(self.api_key)
         self._http = PollinationsHttpClient(
@@ -117,11 +132,15 @@ class ImagePollinations(BaseModel):
             api_key=auth.api_key,
         )
 
-    # --------- API "bind/clone" ---------
-
     def with_params(self, **overrides: Any) -> ImagePollinations:
         """
-        Clona el cliente con nuevos defaults (sin mutar el original).
+        Create a new instance with updated default parameters.
+
+        Args:
+            **overrides: Parameter values to override in the new instance.
+
+        Returns:
+            A new ImagePollinations instance with merged configuration.
         """
         merged = self.model_dump(by_alias=True, exclude_none=False)
         merged.update(overrides)
@@ -129,12 +148,12 @@ class ImagePollinations(BaseModel):
         merged["api_key"] = self.api_key
         return ImagePollinations(**merged)
 
-    # --------- Construcción/validación de query ---------
-
     def _defaults_dict(self) -> dict[str, Any]:
         """
-        Devuelve solo los campos de params que el usuario configuró en la instancia.
-        Lo no configurado queda fuera para que aplique el default del schema. [file:105]
+        Extract the current instance configuration into a clean dictionary.
+
+        Returns:
+            A dictionary containing only the parameters explicitly configured.
         """
         out: dict[str, Any] = {}
         for k in (
@@ -154,6 +173,16 @@ class ImagePollinations(BaseModel):
         return out
 
     def _build_query(self, params: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+        """
+        Build and validate the final query parameters for an API request.
+
+        Args:
+            params: Optional dictionary of parameters to include.
+            **kwargs: Additional parameters passed as keyword arguments.
+
+        Returns:
+            A validated dictionary of query parameters.
+        """
         merged: dict[str, Any] = {}
         merged.update(self._defaults_dict())
         if params:
@@ -164,17 +193,17 @@ class ImagePollinations(BaseModel):
         validated = ImagePromptParams(**merged)
         return validated.to_query()
 
-    # --------- Métodos principales ---------
-
     def generate_response(self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> httpx.Response:
         """
-        Retorna httpx.Response para poder leer:
-        - response.headers["content-type"]
-        - response.status_code
-        - response.url
-        - etc.
+        Execute a synchronous request to the image generation endpoint.
 
-        El body (imagen/video) está en response.content (bytes).
+        Args:
+            prompt: The text description of the image to generate.
+            params: Optional dictionary of query parameters.
+            **kwargs: Additional parameters for the request.
+
+        Returns:
+            The raw HTTP response from the server.
         """
         encoded = quote(prompt, safe="")
         q = self._build_query(params, **kwargs)
@@ -183,22 +212,77 @@ class ImagePollinations(BaseModel):
     async def agenerate_response(
         self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any
     ) -> httpx.Response:
+        """
+        Execute an asynchronous request to the image generation endpoint.
+
+        Args:
+            prompt: The text description of the image to generate.
+            params: Optional dictionary of query parameters.
+            **kwargs: Additional parameters for the request.
+
+        Returns:
+            The raw HTTP response from the server.
+        """
         encoded = quote(prompt, safe="")
         q = self._build_query(params, **kwargs)
         return await self._http.aget(f"/image/{encoded}", params=q)
 
     def generate(self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> bytes:
+        """
+        Generate an image synchronously and return the raw bytes.
+
+        Args:
+            prompt: The text description of the image to generate.
+            params: Optional dictionary of query parameters.
+            **kwargs: Additional parameters for the request.
+
+        Returns:
+            The binary content of the generated image or video.
+        """
         return self.generate_response(prompt, params=params, **kwargs).content
 
     async def agenerate(self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> bytes:
+        """
+        Generate an image asynchronously and return the raw bytes.
+
+        Args:
+            prompt: The text description of the image to generate.
+            params: Optional dictionary of query parameters.
+            **kwargs: Additional parameters for the request.
+
+        Returns:
+            The binary content of the generated image or video.
+        """
         r = await self.agenerate_response(prompt, params=params, **kwargs)
         return r.content
 
     # Runnable-like (para ecosistema LC)
     def invoke(self, input: str, config: Any | None = None, **kwargs: Any) -> bytes:
+        """
+        LangChain-compatible synchronous invocation method.
+
+        Args:
+            input: The text prompt for generation.
+            config: Optional LangChain configuration (unused).
+            **kwargs: Additional generation parameters.
+
+        Returns:
+            The binary content of the generated media.
+        """
         _ = config
         return self.generate(input, **kwargs)
 
     async def ainvoke(self, input: str, config: Any | None = None, **kwargs: Any) -> bytes:
+        """
+        LangChain-compatible asynchronous invocation method.
+
+        Args:
+            input: The text prompt for generation.
+            config: Optional LangChain configuration (unused).
+            **kwargs: Additional generation parameters.
+
+        Returns:
+            The binary content of the generated media.
+        """
         _ = config
         return await self.agenerate(input, **kwargs)

@@ -1,18 +1,32 @@
+"""
+Minimal parser for Server-Sent Events (SSE) that extracts data fields from text blocks.
+Designed primarily for simple string-based event processing.
+"""
+
 from __future__ import annotations
 
-from collections.abc import Iterator
+from typing import Iterator
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class SSEEvent:
+    """
+    Data structure representing a single Server-Sent Event (SSE).
+    Stores the raw string content associated with the 'data' field.
+    """
     data: str
 
 
 def iter_sse_events_from_text(text: str) -> Iterator[SSEEvent]:
     """
-    Parser mínimo: separa eventos por doble salto de línea y extrae líneas 'data:'.
-    Útil para tests unitarios (no para streaming real).
+    Parse SSE events from a text block by splitting on double newlines.
+
+    Args:
+        text: The raw string containing one or multiple SSE events.
+
+    Yields:
+        SSEEvent objects containing the reconstructed data fields.
     """
     for block in text.split("\n\n"):
         lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
@@ -20,4 +34,3 @@ def iter_sse_events_from_text(text: str) -> Iterator[SSEEvent]:
         if not data_lines:
             continue
         yield SSEEvent(data="\n".join(data_lines))
-

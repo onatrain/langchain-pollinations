@@ -556,7 +556,7 @@ def test_iter_sse_json_events_sync_simple():
 
     assert len(events) == 2
     assert events[0] == {"message": "hello"}
-    assert events[1] == {"done": True}
+    assert events[1] == {"__done__": True}
 
 
 def test_iter_sse_json_events_sync_with_blanks():
@@ -589,7 +589,7 @@ async def test_iter_sse_json_events_async_simple():
 
     assert len(events) == 2
     assert events[0] == {"message": "async"}
-    assert events[1] == {"done": True}
+    assert events[1] == {"__done__": True}
 
 
 def test_chat_pollinations_initialization_defaults():
@@ -1168,7 +1168,7 @@ def test_iter_sse_json_events_sync_invalid_json():
     resp = MockResponse()
     events = list(_iter_sse_json_events_sync(resp))
     # Solo debe procesar el JSON válido
-    valid_events = [e for e in events if not e.get("done")]
+    valid_events = [e for e in events if not e.get("__done__")]
     assert len(valid_events) == 1
     assert valid_events[0]["valid"] is True
 
@@ -1201,7 +1201,7 @@ def test_iter_sse_json_events_sync_non_dict_json():
     resp = MockResponse()
     events = list(_iter_sse_json_events_sync(resp))
     # Solo eventos done
-    assert all(e.get("done") for e in events)
+    assert all(e.get("__done__") for e in events)
 
 
 @pytest.mark.asyncio
@@ -1218,7 +1218,7 @@ async def test_iter_sse_json_events_async_invalid_json():
     async for evt in _iter_sse_json_events_async(resp):
         events.append(evt)
 
-    valid_events = [e for e in events if not e.get("done")]
+    valid_events = [e for e in events if not e.get("__done__")]
     assert len(valid_events) == 1
 
 

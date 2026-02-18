@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage
 
 from langchain_pollinations.chat import ChatPollinations
 
-##################################################################
+
 import logging
 
 logging.basicConfig(
@@ -16,7 +16,6 @@ logging.basicConfig(
 # httpcore es el motor interno de httpx
 logging.getLogger("httpcore").setLevel(logging.DEBUG)
 logging.getLogger("httpx").setLevel(logging.DEBUG)
-##################################################################
 
 
 def _chunk_to_text(chunk: object) -> str:

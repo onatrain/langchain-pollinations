@@ -371,10 +371,6 @@ async def test_aget_balance_returns_dict(account, mock_response_json):
     assert isinstance(result, dict)
 
 
-# ============================================================================
-# TESTS: ASYNC get_key
-# ============================================================================
-
 @pytest.mark.asyncio
 async def test_aget_key_success(account, mock_response_json):
     """Test aget_key exitoso"""
@@ -395,10 +391,6 @@ async def test_aget_key_returns_dict(account, mock_response_json):
 
     assert isinstance(result, dict)
 
-
-# ============================================================================
-# TESTS: ASYNC get_usage
-# ============================================================================
 
 @pytest.mark.asyncio
 async def test_aget_usage_without_params_returns_json(account, mock_response_json):
@@ -466,10 +458,6 @@ async def test_aget_usage_with_before_param(account, mock_response_json):
     )
 
 
-# ============================================================================
-# TESTS: ASYNC get_usage_daily
-# ============================================================================
-
 @pytest.mark.asyncio
 async def test_aget_usage_daily_without_params_returns_json(account, mock_response_json):
     """Test aget_usage_daily sin parámetros (default JSON)"""
@@ -506,10 +494,6 @@ async def test_aget_usage_daily_with_csv_format_returns_str(account, mock_respon
     assert isinstance(result, str)
     assert "date,model,cost" in result
 
-
-# ============================================================================
-# TESTS: VALIDACIÓN DE PARÁMETROS (Pydantic)
-# ============================================================================
 
 def test_account_usage_params_valid():
     """Test validación de parámetros válidos"""

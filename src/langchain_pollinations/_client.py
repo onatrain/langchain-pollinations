@@ -1,3 +1,8 @@
+"""
+This module provides a robust HTTP client for interacting with the Pollinations API.
+It supports synchronous and asynchronous requests, JSON processing, and Server-Sent Events (SSE).
+"""
+
 from __future__ import annotations
 
 import json
@@ -13,6 +18,10 @@ from langchain_pollinations._errors import PollinationsAPIError
 
 @dataclass(frozen=True, slots=True)
 class HttpConfig:
+    """
+    Configuration settings for the HTTP client.
+    Includes base URL and timeout durations for network requests.
+    """
     base_url: str
     timeout_s: float = 120.0
 
@@ -23,10 +32,15 @@ def _parse_error_response(
     content_type: str,
 ) -> PollinationsAPIError:
     """
-    Parsea una respuesta de error del API según spec.
+    Parse an API error response body into a structured exception.
 
-    Si el body no es JSON o no matchea el schema esperado,
-    retorna PollinationsAPIError con campos estructurados en None.
+    Args:
+        status_code: The HTTP status code received.
+        body_text: The raw body text of the response.
+        content_type: The 'Content-Type' header of the response.
+
+    Returns:
+        An instance of PollinationsAPIError with parsed details if available.
     """
     message = "HTTP error"
     error_code: str | None = None
@@ -125,18 +139,32 @@ def _parse_error_response(
 
 class PollinationsHttpClient:
     """
-    Wrapper HTTPX ligero con:
-    - JSON requests
-    - Streaming SSE via httpx.Client.stream / AsyncClient.stream
-    - Debug logging opcional
+    A lightweight wrapper around httpx for handling API communication.
+    Features include structured error parsing, automatic header management, and logging.
     """
 
     def __init__(self, *, config: HttpConfig, api_key: str) -> None:
+        """
+        Initialize the HTTP client with specific configuration and authentication.
+
+        Args:
+            config: Configuration object containing base URL and timeouts.
+            api_key: The API key used for Bearer authentication.
+        """
         self._config = config
         self._api_key = api_key
         self._debug_http = os.getenv("POLLINATIONS_HTTP_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
         def _redact_headers(headers: dict[str, Any]) -> dict[str, Any]:
+            """
+            Remove sensitive information from headers for safe logging.
+
+            Args:
+                headers: The dictionary of HTTP headers to process.
+
+            Returns:
+                A copy of headers with the Authorization value redacted.
+            """
             out = dict(headers)
             for k in ("authorization", "Authorization"):
                 if k in out:
@@ -144,6 +172,12 @@ class PollinationsHttpClient:
             return out
 
         def _log_request(request: httpx.Request) -> None:
+            """
+            Log the details of an outgoing HTTP request if debug mode is enabled.
+
+            Args:
+                request: The httpx Request object to log.
+            """
             if not self._debug_http:
                 return
             logging.warning("HTTPX REQUEST %s %s", request.method, request.url)
@@ -155,6 +189,12 @@ class PollinationsHttpClient:
                     logging.warning("HTTPX REQUEST body=(binary) len=%s", len(request.content))
 
         def _log_response_sync(response: httpx.Response) -> None:
+            """
+            Log the details of a received HTTP response synchronously.
+
+            Args:
+                response: The httpx Response object to log.
+            """
             if not self._debug_http:
                 return
             req = response.request
@@ -173,9 +213,21 @@ class PollinationsHttpClient:
                 logging.warning("HTTPX RESPONSE body=(unreadable) err=%r", e)
 
         async def _log_request_async(request: httpx.Request) -> None:
+            """
+            Log the details of an outgoing HTTP request asynchronously.
+
+            Args:
+                request: The httpx Request object to log.
+            """
             _log_request(request)
 
         async def _log_response_async(response: httpx.Response) -> None:
+            """
+            Log the details of a received HTTP response asynchronously.
+
+            Args:
+                response: The httpx Response object to log.
+            """
             if not self._debug_http:
                 return
             req = response.request
@@ -200,12 +252,27 @@ class PollinationsHttpClient:
         self._aclient = httpx.AsyncClient(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks_async)
 
     def close(self) -> None:
+        """
+        Close the underlying synchronous httpx client.
+        """
         self._client.close()
 
     async def aclose(self) -> None:
+        """
+        Close the underlying asynchronous httpx client.
+        """
         await self._aclient.aclose()
 
     def _headers(self, *, accept: str | None = None) -> dict[str, str]:
+        """
+        Generate default headers for API requests including authentication.
+
+        Args:
+            accept: Optional string to specify the 'Accept' header value.
+
+        Returns:
+            A dictionary containing the required HTTP headers.
+        """
         headers: dict[str, str] = {"Authorization": f"Bearer {self._api_key}"}
         if accept:
             headers["Accept"] = accept
@@ -213,7 +280,15 @@ class PollinationsHttpClient:
 
     @staticmethod
     def raise_for_status(resp: httpx.Response) -> None:
-        """Verifica status y levanta PollinationsAPIError estructurado."""
+        """
+        Validate the response status and raise a structured PollinationsAPIError if it failed.
+
+        Args:
+            resp: The httpx Response object to evaluate.
+
+        Raises:
+            PollinationsAPIError: If the status code is not in the 2xx range.
+        """
         if 200 <= resp.status_code < 300:
             return
 
@@ -234,6 +309,17 @@ class PollinationsHttpClient:
         raise error
 
     def post_json(self, path: str, payload: dict[str, Any], *, stream: bool = False) -> httpx.Response:
+        """
+        Execute a synchronous POST request with a JSON payload.
+
+        Args:
+            path: The API endpoint path.
+            payload: Dictionary containing the JSON data to send.
+            stream: Whether the request should be treated as a stream.
+
+        Returns:
+            The httpx Response object.
+        """
         url = f"{self._config.base_url}{path}"
         headers = self._headers(accept="text/event-stream" if stream else None)
         headers["Content-Type"] = "application/json"
@@ -242,6 +328,17 @@ class PollinationsHttpClient:
         return resp
 
     async def apost_json(self, path: str, payload: dict[str, Any], *, stream: bool = False) -> httpx.Response:
+        """
+        Execute an asynchronous POST request with a JSON payload.
+
+        Args:
+            path: The API endpoint path.
+            payload: Dictionary containing the JSON data to send.
+            stream: Whether the request should be treated as a stream.
+
+        Returns:
+            The httpx Response object.
+        """
         url = f"{self._config.base_url}{path}"
         headers = self._headers(accept="text/event-stream" if stream else None)
         headers["Content-Type"] = "application/json"
@@ -250,12 +347,32 @@ class PollinationsHttpClient:
         return resp
 
     def get(self, path: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
+        """
+        Execute a synchronous GET request to the specified path.
+
+        Args:
+            path: The API endpoint path.
+            params: Optional dictionary of query parameters.
+
+        Returns:
+            The httpx Response object.
+        """
         url = f"{self._config.base_url}{path}"
         resp = self._client.get(url, headers=self._headers(), params=params)
         self.raise_for_status(resp)
         return resp
 
     async def aget(self, path: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
+        """
+        Execute an asynchronous GET request to the specified path.
+
+        Args:
+            path: The API endpoint path.
+            params: Optional dictionary of query parameters.
+
+        Returns:
+            The httpx Response object.
+        """
         url = f"{self._config.base_url}{path}"
         resp = await self._aclient.get(url, headers=self._headers(), params=params)
         self.raise_for_status(resp)
@@ -263,12 +380,14 @@ class PollinationsHttpClient:
 
     def stream_post_json(self, path: str, payload: dict[str, Any]) -> Any:
         """
-        Retorna un httpx stream context manager.
+        Initiate a synchronous streaming POST request using a context manager.
 
-        Uso:
-            with client.stream_post_json(...) as r:
-                for line in r.iter_lines():
-                    ...
+        Args:
+            path: The API endpoint path.
+            payload: Dictionary containing the JSON data to send.
+
+        Returns:
+            A context manager for the httpx stream.
         """
         url = f"{self._config.base_url}{path}"
         headers = self._headers(accept="text/event-stream")
@@ -277,12 +396,14 @@ class PollinationsHttpClient:
 
     def astream_post_json(self, path: str, payload: dict[str, Any]) -> Any:
         """
-        Retorna un httpx stream context manager asíncrono.
+        Initiate an asynchronous streaming POST request using a context manager.
 
-        Usage:
-            async with client.astream_post_json(...) as r:
-                async for line in r.aiter_lines():
-                    ...
+        Args:
+            path: The API endpoint path.
+            payload: Dictionary containing the JSON data to send.
+
+        Returns:
+            An asynchronous context manager for the httpx stream.
         """
         url = f"{self._config.base_url}{path}"
         headers = self._headers(accept="text/event-stream")

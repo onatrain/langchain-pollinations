@@ -2,72 +2,74 @@
 
 ## 1) Mapa de módulos
 
-La librería está organizada como un paquete `langchain_pollinations` con una API pública pequeña y varios módulos 
-internos “de soporte” (auth, HTTP, compatibilidad OpenAI). 
+La librería se organiza en el paquete `langchain_pollinations`, exponiendo una API pública concisa y delegando la lógica compleja a módulos internos de soporte.
 
-Los componentes principales se reparten entre wrappers de endpoints (chat, image, account, models) y utilidades 
-transversales (errores, SSE, conversión de mensajes). 
-
-Estructura conceptual: 
+Estructura de archivos y responsabilidades:
 ```text
 langchain_pollinations/
-  __init__.py              -> re-export de API pública
-  chat.py                  -> ChatPollinations (LangChain ChatModel) + tipos OpenAI
-  image.py                 -> ImagePollinations (wrapper endpoint imagen)
-  account.py               -> AccountInformation (endpoints /account/*)
-  models.py                -> ModelInformation (endpoints de modelos)
-  _sse.py                   -> parser SSE mínimo (útil en tests/offline)
-  _auth.py                 -> AuthConfig (API key desde env o parámetro)
-  _client.py               -> PollinationsHttpClient (httpx sync/async)
-  _errors.py               -> excepciones propias (PollinationsAPIError)
-  _openai_compat.py        -> conversión LC messages/tools -> OpenAI JSON
+  __init__.py              -> Exporta la API pública (Chat, Image, Account, Models, Errors).
+  chat.py                  -> ChatPollinations (BaseChatModel), configuración (Pydantic) y binding de tools.
+  image.py                 -> ImagePollinations (generación de imágenes/video) y ImagePromptParams.
+  account.py               -> AccountInformation (perfil, balance, uso) y AccountUsageParams.
+  models.py                -> ModelInformation (listado y filtrado de modelos).
+  _auth.py                 -> AuthConfig (resolución de API Key).
+  _client.py               -> PollinationsHttpClient (wrapper httpx sync/async, manejo de headers y logging).
+  _errors.py               -> PollinationsAPIError y jerarquía de excepciones.
+  _sse.py                  -> Parser minimalista de Server-Sent Events.
+  _openai_compat.py        -> Normalización de mensajes, conversión de tools, tipos para audio/thinking y filtros de contenido.
 ```
 
 ## 2) API pública vs interna
-La API pública se expone desde `__init__.py` mediante un `__all__` explícito, lo cual ayuda a mantener una superficie 
-estable de imports para usuarios.
+La superficie pública se define en `__init__.py` mediante `__all__`:
+- **Core**: `ChatPollinations`, `ImagePollinations`.
+- **Información**: `AccountInformation`, `ModelInformation`.
+- **Errores**: `PollinationsAPIError`.
 
-Las piezas internas (`AuthConfig`, `PollinationsHttpClient`, utilidades de compatibilidad OpenAI) se consumen desde 
-los wrappers, pero no se promueven como “entry points” del usuario final. 
+Los módulos iniciados con guion bajo (`_client.py`, `_openai_compat.py`, etc.) son de uso interno exclusivo para la librería, encapsulando la complejidad de la comunicación HTTP y la serialización de datos.
 
 ## 3) Composición por responsabilidades
-**Chat**: `chat.py` concentra (a) el modelo `ChatPollinations` compatible con LangChain y (b) los tipos/validación 
-Pydantic del request body de `/v1/chat/completions` (por ejemplo `ChatPollinationsConfig`, `ToolDef`, `ResponseFormat`, 
-etc.).
 
-**HTTP/Auth**: `_auth.py` resuelve la API key (env o argumento) y `_client.py` encapsula `httpx.Client`/`httpx.AsyncClient` 
-con métodos `get/post_json` (sync/async) y normaliza errores HTTP a `PollinationsAPIError`.  
+### Chat (`chat.py` + `_openai_compat.py`)
+- **ChatPollinations**: Implementa `BaseChatModel`. Gestiona el ciclo de vida del request, configuración (`ChatPollinationsConfig`), y métodos estándar de LangChain (`invoke`, `stream`, `bind_tools`).
+- **Compatibilidad**: `_openai_compat.py` actúa como puente de traducción.
+    - **Input**: Convierte mensajes LangChain a diccionarios JSON compatibles con la API (`lc_messages_to_openai`), normalizando contenido multimodal (audio, imágenes).
+    - **Output**: Define `TypedDicts` para estructuras complejas de respuesta (`AudioTranscript`, `ContentBlockThinking`, `ContentFilterResult`).
+    - **Tools**: Transforma definiciones de herramientas (Pydantic, funciones, dicts) al esquema JSON esperado (`tool_to_openai_tool`).
 
-**Otros endpoints**: `image.py`, `models.py` y `account.py` son wrappers delgados (dataclasses) que inicializan un 
-`PollinationsHttpClient` y exponen métodos directos hacia endpoints específicos. 
+### Imagen (`image.py`)
+- **ImagePollinations**: Wrapper configurable para el endpoint `/image/{prompt}`.
+- **Validación**: Utiliza `ImagePromptParams` (Pydantic) para validar y serializar parámetros de query string como `model`, `width`, `height`, `seed`, `enhance` y `aspect_ratio`.
+- **Fluent Interface**: Método `with_params()` para crear nuevas instancias con configuración ajustada de forma inmutable.
 
-## 4) Flujo de datos (chat)
-Entrada: el usuario llama `invoke()`/`stream()` sobre `ChatPollinations` pasando `list[BaseMessage]` (mensajes 
-LangChain). 
+### Cuenta y Modelos (`account.py`, `models.py`)
+- **AccountInformation**: Clases de datos (`dataclass`) que exponen métodos para recuperar perfil, balance y reportes de uso. Utiliza `AccountUsageParams` para filtrar logs de consumo.
+- **ModelInformation**: Utilidades para listar modelos disponibles, categorizándolos en texto e imagen y extrayendo identificadores normalizados.
 
-Transformación: `lc_messages_to_openai()` convierte esos mensajes a la forma `{"role": ..., "content": ...}` y 
-`_build_payload()` arma el payload final aplicando defaults (`request_defaults`) y validando con Pydantic.
+### Transporte y Seguridad (`_client.py`, `_auth.py`)
+- **PollinationsHttpClient**: Cliente HTTP robusto sobre `httpx`. Maneja:
+    - Ciclo de vida de clientes síncronos y asíncronos.
+    - Parsing automático de errores JSON a `PollinationsAPIError`.
+    - Logging de depuración con redacción de credenciales (`Authorization`).
+- **AuthConfig**: Centraliza la lógica de obtención de la API Key desde argumentos o variables de entorno.
 
-Salida: `_generate()` hace POST JSON y `_parse_chat_result()` convierte `choices[0].message` a `AIMessage`, mientras 
-que `_stream()` abre un stream SSE y va emitiendo `AIMessageChunk`/`ChatGenerationChunk` al parsear cada `data: ...`.
+## 4) Flujo de datos (Chat)
 
-Diagrama simplificado del call flow:
-```text
-User -> ChatPollinations.invoke(messages)
-    -> lc_messages_to_openai(messages)
-    -> _build_payload(...)
-    -> PollinationsHttpClient.post_json("/v1/chat/completions", payload)
-    -> resp.json()
-    -> _parse_chat_result(data)
-    -> AIMessage (LangChain)
-```
+El flujo de una petición de chat atraviesa varias capas de transformación para soportar características avanzadas como multimodalidad y "thinking".
 
-## 5) Piezas auxiliares (SSE, tools, errores)
-`sse.py` incluye un parser SSE mínimo basado en separar por doble salto de línea y extraer líneas `data:`, orientado a 
-parsing offline o pruebas, no a streaming “en vivo” de red. 
+1.  **Entrada**: El usuario invoca `ChatPollinations.invoke(messages)`.
+2.  **Normalización**: `lc_messages_to_openai` procesa la lista de mensajes.
+    - `HumanMessage` con contenido multimodal se normaliza.
+    - `ToolMessage` se simplifica para cumplir con el esquema estricto del proveedor.
+    - `AIMessage` con `tool_calls` se convierte al formato de OpenAI.
+3.  **Construcción del Payload**: Se combinan los mensajes procesados con la configuración del modelo (`model`, `temperature`, `tools`, etc.).
+4.  **Transporte**: `PollinationsHttpClient` ejecuta `post_json` (o `stream_post_json`).
+5.  **Procesamiento de Respuesta**:
+    - **Síncrono**: Se parsea el JSON y `_message_content_from_message_dict` extrae el contenido, priorizando texto pero recuperando bloques de `thinking` o transcripciones de audio si están presentes.
+    - **Streaming**: El iterador consume eventos SSE. `_delta_content_from_delta_dict` acumula fragmentos de texto o estructuras de `content_blocks` (para razonamiento incremental).
+6.  **Salida**: Se retorna un `AIMessage` (o `AIMessageChunk`) que puede incluir `additional_kwargs` con metadatos de seguridad (`prompt_filter_results`) o estructuras de razonamiento (`thinking`).
 
-`_openai_compat.py` también se encarga de mapear herramientas a `tools` en formato OpenAI (`tool_to_openai_tool`) y de 
-trasladar campos relevantes como `tool_call_id` en `ToolMessage`. 
-
-`_errors.py` define una jerarquía propia (`PollinationsError` y `PollinationsAPIError`) para que los consumidores 
-puedan capturar errores de forma consistente sin depender de excepciones de httpx directamente. 
+## 5) Manejo de Tipos y Estructuras Auxiliares
+La librería utiliza extensivamente `TypedDict` y `Pydantic` para garantizar la corrección de los datos:
+- **Audio y Multimodalidad**: `_openai_compat.py` define `AudioTranscript` y lógica para inferir formatos de audio (`_infer_audio_format_from_mime`) y normalizar entradas `input_audio`.
+- **Seguridad y Filtros**: Estructuras como `ContentFilterResult` y `PromptFilterResultItem` permiten mapear detalladamente las respuestas de moderación de contenido del API.
+- **Reasoning**: Soporte explícito para bloques `thinking` y `redacted_thinking`, permitiendo a los modelos exponer sus cadenas de pensamiento antes de la respuesta final.

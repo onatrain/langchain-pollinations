@@ -235,6 +235,7 @@ async def test_aclose_closes_underlying_async_client():
 
     mock_ac.aclose.assert_awaited_once()
 
+
 def test_log_request_and_redact_headers_debug_on(monkeypatch, caplog):
     # Activa el modo debug de HTTP para que se ejecuten los hooks de logging.
     monkeypatch.setenv("POLLINATIONS_HTTP_DEBUG", "1")
@@ -355,6 +356,7 @@ async def test_log_request_and_response_async_debug_on(monkeypatch, caplog):
 
     messages = " ".join(rec.getMessage() for rec in caplog.records)
     assert "HTTPX RESPONSE" in messages
+
 
 def test_raise_for_status_handles_text_error():
     # Cubre la rama except al intentar leer resp.text en un error.

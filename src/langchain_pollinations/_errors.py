@@ -1,18 +1,26 @@
+"""
+This module defines the custom exception classes used throughout the library.
+It provides structured error handling for Pollinations API responses and general runtime errors.
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
 
 class PollinationsError(RuntimeError):
-    """Error base de la librería."""
+    """
+    Base error class for the Pollinations library.
+    All other custom exceptions in this package inherit from this class.
+    """
 
 
 @dataclass(slots=True)
 class PollinationsAPIError(PollinationsError):
     """
-    Error de API de Pollinations con soporte para respuestas estructuradas.
+    Pollinations API Error with structured response support.
 
-    Cuando el backend retorna un error JSON con formato:
+    Reflects backend JSON errors with format:
     {
         "status": 400/401/403/500,
         "success": false,
@@ -26,7 +34,7 @@ class PollinationsAPIError(PollinationsError):
         }
     }
 
-    Los campos estructurados se parsean automáticamente para facilitar debugging.
+    Structured fields are automatically parsed from JSON error envelopes for easy debugging.
     """
     status_code: int
     message: str
@@ -40,6 +48,12 @@ class PollinationsAPIError(PollinationsError):
     cause: Any | None = None
 
     def __str__(self) -> str:
+        """
+        Return a string representation of the API error including status code and details.
+
+        Returns:
+            A formatted string containing status code, error code, and message.
+        """
         parts = [f"PollinationsAPIError(status_code={self.status_code}"]
         if self.error_code:
             parts.append(f", code={self.error_code!r}")
@@ -52,6 +66,12 @@ class PollinationsAPIError(PollinationsError):
         return "".join(parts)
 
     def __repr__(self) -> str:
+        """
+        Return a developer-friendly representation of the error object.
+
+        Returns:
+            A string showing all internal fields of the exception.
+        """
         return (
             f"PollinationsAPIError("
             f"status_code={self.status_code}, "
@@ -65,7 +85,12 @@ class PollinationsAPIError(PollinationsError):
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Convierte el error a dict para logging estructurado."""
+        """
+        Convert the error instance into a dictionary for structured logging.
+
+        Returns:
+            A dictionary containing all error attributes and metadata.
+        """
         return {
             "status_code": self.status_code,
             "message": self.message,
@@ -79,20 +104,40 @@ class PollinationsAPIError(PollinationsError):
 
     @property
     def is_client_error(self) -> bool:
-        """True si es un error 4xx (problema del cliente)."""
+        """
+        Check if the error corresponds to a 4xx client-side issue.
+
+        Returns:
+            True if the HTTP status code is between 400 and 499.
+        """
         return 400 <= self.status_code < 500
 
     @property
     def is_server_error(self) -> bool:
-        """True si es un error 5xx (problema del servidor)."""
+        """
+        Check if the error corresponds to a 5xx server-side issue.
+
+        Returns:
+            True if the HTTP status code is between 500 and 599.
+        """
         return 500 <= self.status_code < 600
 
     @property
     def is_auth_error(self) -> bool:
-        """True si es un error de autenticación (401) o autorización (403)."""
+        """
+        Determine if the error is related to authentication or authorization.
+
+        Returns:
+            True if the status code is 401 (Unauthorized) or 403 (Forbidden).
+        """
         return self.status_code in (401, 403)
 
     @property
     def is_validation_error(self) -> bool:
-        """True si es un error de validación (400 con BAD_REQUEST)."""
+        """
+        Determine if the error is due to validation of parameters sent to the API.
+
+        Returns:
+            True if the status is 400 and the error code is 'BAD_REQUEST'.
+        """
         return self.status_code == 400 and self.error_code == "BAD_REQUEST"

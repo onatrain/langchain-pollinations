@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage
 from langchain_pollinations.chat import ChatPollinations
 from langchain_pollinations._errors import PollinationsAPIError
 
+
 if os.getenv("POLLINATIONS_HTTP_DEBUG", "").lower() in {"1", "true", "yes", "on"}:
     import logging
 
@@ -30,6 +31,7 @@ def test_chat_completions_text() -> None:
     )
     res = model.invoke([HumanMessage(content="Responde solo con la palabra: OK")])
     assert "OK" in (res.content or "")
+
 
 @pytest.mark.integration
 def test_chat_error_handling() -> None:

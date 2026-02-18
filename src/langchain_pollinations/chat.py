@@ -1,3 +1,8 @@
+"""
+This module implements the LangChain chat model wrapper for the Pollinations AI API.
+It provides full support for streaming, multimodal content, tool calling, and structured output.
+"""
+
 from __future__ import annotations
 
 import contextlib
@@ -23,9 +28,6 @@ CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 DEFAULT_BASE_URL = "https://gen.pollinations.ai"
 INT53_MAX = 9007199254740991
 
-# ---------------------------------------------------------------------------
-# Request schema subset alineado a Pollinations OpenAPI, api.json
-# ---------------------------------------------------------------------------
 
 TextModelId = Literal[
     "openai",
@@ -80,33 +82,57 @@ BiasValue = Annotated[int, Field(ge=-INT53_MAX, le=INT53_MAX)]
 
 
 class AudioConfig(BaseModel):
+    """
+    Configuration for audio generation parameters.
+    Defines the voice and audio format used for spoken model outputs.
+    """
     model_config = ConfigDict(extra="forbid")
     voice: VoiceId
     format: AudioFormat
 
 
 class StreamOptions(BaseModel):
+    """
+    Options for controlling streaming behavior.
+    Includes settings for whether to include token usage statistics in the stream.
+    """
     model_config = ConfigDict(extra="allow")
     include_usage: Optional[bool] = None
 
 
 class ThinkingConfig(BaseModel):
+    """
+    Configuration for models with internal reasoning capabilities.
+    Allows enabling or disabling thinking and setting a token budget for reasoning.
+    """
     model_config = ConfigDict(extra="allow")
     type: Literal["enabled", "disabled"] = "disabled"
     budget_tokens: Optional[Annotated[int, Field(ge=1, le=INT53_MAX)]] = None
 
 
 class ResponseFormatText(BaseModel):
+    """
+    Schema for a plain text response format.
+    Ensures the model returns response data as a standard text string.
+    """
     model_config = ConfigDict(extra="allow")
     type: Literal["text"]
 
 
 class ResponseFormatJsonObject(BaseModel):
+    """
+    Schema for a JSON object response format.
+    Instructs the model to output a valid JSON object.
+    """
     model_config = ConfigDict(extra="allow")
     type: Literal["json_object"]
 
 
 class ResponseFormatJsonSchemaObject(BaseModel):
+    """
+    Detailed structure for defining a specific JSON schema for the response.
+    Includes schema definitions, name, description, and strict validation flags.
+    """
     model_config = ConfigDict(extra="allow", populate_by_name=True)
     description: Optional[str] = None
     name: Optional[str] = None
@@ -115,6 +141,10 @@ class ResponseFormatJsonSchemaObject(BaseModel):
 
 
 class ResponseFormatJsonSchema(BaseModel):
+    """
+    Top-level schema for JSON-based structured output.
+    Contains the nested JSON schema object used for model guidance.
+    """
     model_config = ConfigDict(extra="allow")
     type: Literal["json_schema"]
     json_schema: ResponseFormatJsonSchemaObject
@@ -124,6 +154,10 @@ ResponseFormat = Union[ResponseFormatText, ResponseFormatJsonSchema, ResponseFor
 
 
 class ToolFunction(BaseModel):
+    """
+    Definition of a function-based tool.
+    Contains the name, description, parameters, and optional strictness flags.
+    """
     model_config = ConfigDict(extra="allow")
     name: str
     description: Optional[str] = None
@@ -132,6 +166,10 @@ class ToolFunction(BaseModel):
 
 
 class ToolFunctionTool(BaseModel):
+    """
+    Wrapper for a function tool within the API tool schema.
+    Specifies the tool type as 'function' and contains the associated logic.
+    """
     model_config = ConfigDict(extra="allow")
     type: Literal["function"]
     function: ToolFunction
@@ -148,6 +186,10 @@ BuiltinToolType = Literal[
 
 
 class ToolBuiltinTool(BaseModel):
+    """
+    Reference to a pre-defined builtin tool provided by the platform.
+    Specifies the type of builtin tool, such as search or code execution.
+    """
     model_config = ConfigDict(extra="allow")
     type: BuiltinToolType
 
@@ -156,6 +198,10 @@ ToolDef = Union[ToolFunctionTool, ToolBuiltinTool]
 
 
 class FunctionDef(BaseModel):
+    """
+    Legacy-style function definition for structured output.
+    Includes basic fields for identifying and parameterizing a function.
+    """
     model_config = ConfigDict(extra="forbid")
     name: str
     description: Optional[str] = None
@@ -163,32 +209,32 @@ class FunctionDef(BaseModel):
 
 
 class ToolChoiceFunctionInner(BaseModel):
+    """
+    Inner structure for choosing a specific tool by name.
+    Identifies the exact function the model is forced to call.
+    """
     model_config = ConfigDict(extra="allow")
     name: str
 
 
 class ToolChoiceFunction(BaseModel):
+    """
+    Wrapper for forcing the model to use a specific function.
+    Specifies the type as 'function' and points to the inner choice details.
+    """
     model_config = ConfigDict(extra="allow")
     type: Literal["function"]
     function: ToolChoiceFunctionInner
-
-
-def _normalize_tool_choice(tc: Any) -> Any:
-    if tc is None:
-        return None
-    # LangChain suele pasar "any" en with_structured_output
-    if tc == "any":
-        return "required"
-    # Algunas capas podrían pasar {"type": "any"} (defensivo)
-    if isinstance(tc, dict) and tc.get("type") == "any":
-        return "required"
-    return tc
 
 
 ToolChoice = Union[Literal["none", "auto", "required"], ToolChoiceFunction]
 
 
 class FunctionCallName(BaseModel):
+    """
+    Structure for identifying a function to be called in legacy mode.
+    Used for specifying the name of the function selected by the model.
+    """
     model_config = ConfigDict(extra="allow")
     name: str
 
@@ -196,50 +242,15 @@ class FunctionCallName(BaseModel):
 FunctionCall = Union[Literal["none", "auto"], FunctionCallName]
 
 
-class ChatPollinationsConfig(BaseModel):
-    """
-    Request body para POST /v1/chat/completions (excepto messages).
-    Alineamiento con proveedor: evitar enviar campos a menos que esté configurado explícitamente.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    model: Optional[TextModelId] = None
-    modalities: Optional[list[Modality]] = None
-    audio: Optional[AudioConfig] = None
-    temperature: Optional[FloatTemperature] = None
-    top_p: Optional[FloatTopP] = None
-    max_tokens: Optional[Int0ToInt53] = None
-    stop: Optional[Union[str, Annotated[list[str], Field(min_length=1, max_length=4)]]] = None
-    seed: Optional[SeedInt] = None
-    presence_penalty: Optional[FloatPenalty] = None
-    frequency_penalty: Optional[FloatPenalty] = None
-    repetition_penalty: Optional[FloatRepetitionPenalty] = None
-    logit_bias: Optional[dict[str, BiasValue]] = None
-    logprobs: Optional[bool] = None
-    top_logprobs: Optional[TopLogprobsInt] = None
-    stream: Optional[bool] = None
-    stream_options: Optional[StreamOptions] = None
-    response_format: Optional[ResponseFormat] = None
-    tools: Optional[list[ToolDef]] = None
-    tool_choice: Optional[ToolChoice] = None
-    parallel_tool_calls: Optional[bool] = None
-    user: Optional[str] = None
-    functions: Optional[Annotated[list[FunctionDef], Field(min_length=1, max_length=128)]] = None
-    function_call: Optional[FunctionCall] = None
-    thinking: Optional[ThinkingConfig] = None
-    reasoning_effort: Optional[ReasoningEffort] = None
-    thinking_budget: Optional[Int0ToInt53] = None
-
-
-# ---------------------------------------------------------------------------
-# Response parsing helpers
-# ---------------------------------------------------------------------------
-
-
 def _extract_text_from_content_blocks(obj: Any) -> str:
     """
-    Extrae solo el texto de bloques tipo 'text', ignorando 'thinking', 'redacted_thinking', etc.
+    Aggregate text segments from a list of content blocks, filtering out reasoning.
+
+    Args:
+        obj: A list of content block dictionaries.
+
+    Returns:
+        A concatenated string of all text found in the blocks.
     """
     if not isinstance(obj, list):
         return ""
@@ -257,6 +268,15 @@ def _extract_text_from_content_blocks(obj: Any) -> str:
 
 
 def _usage_metadata_from_usage(usage: Any) -> UsageMetadata | None:
+    """
+    Parse the API usage statistics into a LangChain-compatible UsageMetadata object.
+
+    Args:
+        usage: The raw usage dictionary from the API response.
+
+    Returns:
+        A UsageMetadata object with token counts, or None if parsing fails.
+    """
     if not isinstance(usage, dict):
         return None
 
@@ -288,6 +308,15 @@ def _usage_metadata_from_usage(usage: Any) -> UsageMetadata | None:
 
 
 def _response_metadata_from_response(obj: dict[str, Any]) -> dict[str, Any]:
+    """
+    Extract general metadata and safety results from the API response body.
+
+    Args:
+        obj: The full response dictionary from the API.
+
+    Returns:
+        A dictionary containing IDs, model info, and safety filter results.
+    """
     md: dict[str, Any] = {}
     for k in ("id", "model", "created", "system_fingerprint", "user_tier", "object"):
         if k in obj and obj[k] is not None:
@@ -304,44 +333,15 @@ def _response_metadata_from_response(obj: dict[str, Any]) -> dict[str, Any]:
     return md
 
 
-'''
 def _message_content_from_message_dict(message: dict[str, Any]) -> Any:
     """
-    Conservar las formas multimodales cuando estén presentes:
-    - message.content: str | list[part] | None
-    - message.content_blocks: list[block] | None
-    - message.audio.transcript: str
+    Extract message content from an API response, prioritizing multimodal parts.
 
-    Robustecido para manejar ausencia de transcript.
-    """
-    # Prioridad 1: content explícito
-    if "content" in message and message.get("content") is not None:
-        return message.get("content")
+    Args:
+        message: The message dictionary from the response choice.
 
-    # Prioridad 2: content_blocks
-    blocks = message.get("content_blocks")
-    if isinstance(blocks, list) and blocks:
-        return blocks
-
-    # Prioridad 3: audio.transcript (con fallback robusto)
-    audio = message.get("audio")
-    if isinstance(audio, dict):
-        transcript = audio.get("transcript")
-        if isinstance(transcript, str) and transcript:
-            return transcript
-
-    # Fallback: string vacío en lugar de None para evitar errores downstream
-    return ""
-'''
-
-def _message_content_from_message_dict(message: dict[str, Any]) -> Any:
-    """
-    Conservar las formas multimodales cuando estén presentes:
-    - message.content: str | list[part] | None
-    - message.content_blocks: list[block] | None
-    - message.audio.transcript: str
-
-    Robustecido para manejar ausencia de transcript y preferir bloques sobre string vacío.
+    Returns:
+        The content as a string or a list of content blocks.
     """
     raw_content = message.get("content")
 
@@ -371,27 +371,16 @@ def _message_content_from_message_dict(message: dict[str, Any]) -> Any:
     return ""
 
 
-'''
 def _delta_content_from_delta_dict(delta: dict[str, Any]) -> Any:
-    """Extrae contenido delta con prioridades similares."""
-    if "content" in delta and delta.get("content") is not None:
-        return delta.get("content")
+    """
+    Extract the incremental content from a streaming delta dictionary.
 
-    blocks = delta.get("content_blocks")
-    if isinstance(blocks, list) and blocks:
-        return blocks
+    Args:
+        delta: The delta dictionary from a streaming event choice.
 
-    audio = delta.get("audio")
-    if isinstance(audio, dict):
-        transcript = audio.get("transcript")
-        if isinstance(transcript, str) and transcript:
-            return transcript
-
-    return ""
-'''
-
-def _delta_content_from_delta_dict(delta: dict[str, Any]) -> Any:
-    """Extrae contenido delta con prioridades similares."""
+    Returns:
+        The incremental content as a string or a list of parts.
+    """
     raw_content = delta.get("content")
 
     # 1. Si content es string con texto, usarlo
@@ -421,8 +410,13 @@ def _delta_content_from_delta_dict(delta: dict[str, Any]) -> Any:
 
 def _text_from_any_content(content: Any) -> str:
     """
-    Usado solo para streaming de tokens. Se mantienen tokens textuales en AIMessageChunk.content
-    y se preservan partes estructuradas en additional_kwargs.
+    Convert any content representation into a plain text string for token streaming.
+
+    Args:
+        content: The content object which may be a string or a list of blocks.
+
+    Returns:
+        The textual representation of the content.
     """
     if isinstance(content, str):
         return content
@@ -432,6 +426,15 @@ def _text_from_any_content(content: Any) -> str:
 
 
 def _tool_call_chunks_from_delta(delta: dict[str, Any]) -> list[ToolCallChunk]:
+    """
+    Parse streaming tool call deltas into LangChain tool call chunks.
+
+    Args:
+        delta: The delta dictionary from a streaming event choice.
+
+    Returns:
+        A list of ToolCallChunk objects representing partial tool call data.
+    """
     raw = delta.get("tool_calls")
     if not isinstance(raw, list):
         return []
@@ -460,10 +463,13 @@ def _tool_call_chunks_from_delta(delta: dict[str, Any]) -> list[ToolCallChunk]:
 
 def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
     """
-    SSE parser para respuestas streaming de httpx.
-    - Admite varias líneas data: por evento.
-    - Trata una línea en blanco como delimitador cuando está presente.
-    - Analiza cada línea data: como un evento (comportamiento común del proveedor).
+    Synchronously parse a Server-Sent Events stream into JSON objects.
+
+    Args:
+        resp: The sync HTTP response object from httpx.
+
+    Yields:
+        Parsed JSON dictionaries for each SSE event.
     """
     data_lines: list[str] = []
 
@@ -475,7 +481,7 @@ def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
         if not payload:
             return iter([])
         if payload == "[DONE]":
-            return iter([{"done": True}])
+            return iter([{"__done__": True}])
         try:
             obj = json.loads(payload)
         except Exception:
@@ -504,7 +510,7 @@ def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
 
         piece = line[len("data:"):].lstrip()
         if piece == "[DONE]":
-            yield {"done": True}
+            yield {"__done__": True}
             return
 
         # La mayoría de los proveedores envían un JSON por línea de datos; aun así, admitimos la unión.
@@ -518,6 +524,15 @@ def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
 
 
 async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]]:
+    """
+    Asynchronously parse a Server-Sent Events stream into JSON objects.
+
+    Args:
+        resp: The async HTTP response object from httpx.
+
+    Yields:
+        Parsed JSON dictionaries for each SSE event.
+    """
     data_lines: list[str] = []
 
     async def flush() -> list[dict[str, Any]]:
@@ -528,7 +543,7 @@ async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]
         if not payload:
             return []
         if payload == "[DONE]":
-            return [{"done": True}]
+            return [{"__done__": True}]
         try:
             obj = json.loads(payload)
         except Exception:
@@ -546,7 +561,7 @@ async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]
 
         piece = line[len("data:"):].lstrip()
         if piece == "[DONE]":
-            yield {"done": True}
+            yield {"__done__": True}
             return
 
         data_lines.append(piece)
@@ -559,6 +574,15 @@ async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]
 
 
 def _parse_tool_calls(message: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Extract and validate tool calls from a completed message dictionary.
+
+    Args:
+        message: The message dictionary containing potential tool calls.
+
+    Returns:
+        A tuple containing lists of valid and invalid tool call dictionaries.
+    """
     raw = message.get("tool_calls")
     if not isinstance(raw, list):
         return [], []
@@ -600,18 +624,67 @@ def _parse_tool_calls(message: dict[str, Any]) -> tuple[list[dict[str, Any]], li
     return tool_calls, invalid
 
 
-# ------------------------------------------------------------------------------------
-# Chat wrapper alineado con LangChain v1.2.x, streaming real via .stream/.astream
-# ------------------------------------------------------------------------------------
+def _normalize_tool_choice(tc: Any) -> Any:
+    """
+    Convert LangChain tool choice values to compatible Pollinations API values.
+
+    Args:
+        tc: The raw tool choice from LangChain or a dictionary.
+
+    Returns:
+        A normalized string or dictionary representing the tool choice.
+    """
+    if tc is None:
+        return None
+    # LangChain suele pasar "any" en with_structured_output
+    if tc == "any":
+        return "required"
+    # Algunas capas podrían pasar {"type": "any"} (defensivo)
+    if isinstance(tc, dict) and tc.get("type") == "any":
+        return "required"
+    return tc
+
+
+class ChatPollinationsConfig(BaseModel):
+    """
+    Comprehensive request configuration for the chat completions endpoint.
+    Includes all model parameters except the conversation messages themselves.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: Optional[TextModelId] = None
+    modalities: Optional[list[Modality]] = None
+    audio: Optional[AudioConfig] = None
+    temperature: Optional[FloatTemperature] = None
+    top_p: Optional[FloatTopP] = None
+    max_tokens: Optional[Int0ToInt53] = None
+    stop: Optional[Union[str, Annotated[list[str], Field(min_length=1, max_length=4)]]] = None
+    seed: Optional[SeedInt] = None
+    presence_penalty: Optional[FloatPenalty] = None
+    frequency_penalty: Optional[FloatPenalty] = None
+    repetition_penalty: Optional[FloatRepetitionPenalty] = None
+    logit_bias: Optional[dict[str, BiasValue]] = None
+    logprobs: Optional[bool] = None
+    top_logprobs: Optional[TopLogprobsInt] = None
+    stream: Optional[bool] = None
+    stream_options: Optional[StreamOptions] = None
+    response_format: Optional[ResponseFormat] = None
+    tools: Optional[list[ToolDef]] = None
+    tool_choice: Optional[ToolChoice] = None
+    parallel_tool_calls: Optional[bool] = None
+    user: Optional[str] = None
+    functions: Optional[Annotated[list[FunctionDef], Field(min_length=1, max_length=128)]] = None
+    function_call: Optional[FunctionCall] = None
+    thinking: Optional[ThinkingConfig] = None
+    reasoning_effort: Optional[ReasoningEffort] = None
+    thinking_budget: Optional[Int0ToInt53] = None
 
 
 class ChatPollinations(BaseChatModel):
     """
-    LangChain ChatModel para OpenAI-compatible endpoint de Pollinations: /v1/chat/completions
-
-    Contrato para el Streaming:
-    - .invoke/.ainvoke usan respuesta no-streaming
-    - .stream/.astream realizan streaming real and emiten message chunks
+    LangChain-compatible ChatModel for the Pollinations AI API.
+    Handles authentication, request construction, and parsing of sync/async responses.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -641,6 +714,18 @@ class ChatPollinations(BaseChatModel):
         preserve_multimodal_deltas: bool = True,
         **kwargs: Any,
     ) -> None:
+        """
+        Initialize the Pollinations chat model with configuration and credentials.
+
+        Args:
+            api_key: The API key for authentication, defaults to environment variable.
+            base_url: The base URL of the Pollinations API.
+            timeout_s: Request timeout in seconds.
+            request_defaults: Default configuration for all chat completions.
+            include_usage_in_stream: Whether to request usage info in streaming mode.
+            preserve_multimodal_deltas: Whether to keep multimodal data in streaming chunks.
+            **kwargs: Additional parameters passed to the base chat model.
+        """
         rd_keys = set(ChatPollinationsConfig.model_fields.keys())
         rd_kwargs = {k: v for k, v in kwargs.items() if k in rd_keys}
         lc_kwargs = {k: v for k, v in kwargs.items() if k not in rd_keys}
@@ -668,10 +753,22 @@ class ChatPollinations(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
+        """
+        The type of the LLM for logging and monitoring.
+
+        Returns:
+            The string identifier for this chat model type.
+        """
         return "pollinations-chat"
 
     @property
     def _identifying_params(self) -> dict[str, Any]:
+        """
+        Retrieve parameters that uniquely identify the instance configuration.
+
+        Returns:
+            A dictionary of the model's core configuration settings.
+        """
         return {
             "model": self.request_defaults.model or "",
             "base_url": self.base_url,
@@ -690,13 +787,17 @@ class ChatPollinations(BaseChatModel):
         **kwargs: Any
     ) -> Runnable[LanguageModelInput, AIMessage]:
         """
-        Liga tools a la instancia del chat model.
+        Bind tools to the chat model for use in generating completions.
 
-        Compatibilidad LangChain:
-        - Acepta **kwargs que LangChain inyecta (p.ej. ls_structured_output_format).
-        - Normaliza tool_choice="any" -> "required" (Pollinations/OpenAI no soporta "any").
-        - Convierte herramientas (incluyendo Pydantic models / TypedDict usados por with_structured_output)
-          a OpenAI tool schema.
+        Args:
+            tools: A sequence of tool definitions in various formats.
+            tool_choice: Specifies which tool the model should use.
+            parallel_tool_calls: Whether the model can call multiple tools at once.
+            strict: Whether to enforce strict schema adherence for tools.
+            **kwargs: Additional keyword arguments for the binding process.
+
+        Returns:
+            A runnable object with the tools bound to the model.
         """
         # 1) Normaliza tool_choice para compatibilidad con proveedor
         tool_choice_norm = _normalize_tool_choice(tool_choice) if tool_choice is not None else None
@@ -712,6 +813,15 @@ class ChatPollinations(BaseChatModel):
         }
 
         def _convert_one_tool(t: Any) -> dict[str, Any]:
+            """
+            Convert a single tool definition into an OpenAI-compatible dictionary.
+
+            Args:
+                t: The tool input, supporting Pollinations built-ins, LangChain tools, or Pydantic models.
+
+            Returns:
+                A dictionary formatted according to the OpenAI tool and function schema.
+            """
             # 2.1.1) Builtin tool de Pollinations ya viene como dict {"type": "..."}
             if isinstance(t, dict) and t.get("type") in builtin_types:
                 return cast(dict[str, Any], t)
@@ -824,9 +934,15 @@ class ChatPollinations(BaseChatModel):
 
     def _build_payload(self, messages: list[BaseMessage], stop: list[str] | None, **kwargs: Any) -> dict[str, Any]:
         """
-        Construye el request payload.
-        Importante: Ignora los kwargs ajenos al proveedor y que la capa Runnable pueda pasar.
-        (p.e., "stream_mode"..., "include_names"..., etc.)
+        Assemble the final request payload for the chat completions API.
+
+        Args:
+            messages: The history of messages in the conversation.
+            stop: A list of stop sequences for generation.
+            **kwargs: Override parameters for the specific request.
+
+        Returns:
+            A dictionary formatted as a valid JSON request body.
         """
         payload: dict[str, Any] = {"messages": lc_messages_to_openai(messages)}
         payload.update(
@@ -873,6 +989,15 @@ class ChatPollinations(BaseChatModel):
         return payload
 
     def _parse_chat_result(self, data: dict[str, Any]) -> ChatResult:
+        """
+        Convert a successful API response into a LangChain ChatResult.
+
+        Args:
+            data: The JSON dictionary from the API response.
+
+        Returns:
+            A ChatResult object containing generations and metadata.
+        """
         response_metadata = _response_metadata_from_response(data)
         usage_metadata = _usage_metadata_from_usage(data.get("usage"))
 
@@ -939,6 +1064,18 @@ class ChatPollinations(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        """
+        Execute a synchronous chat completion request.
+
+        Args:
+            messages: The sequence of messages to send to the model.
+            stop: Optional list of stop sequences.
+            run_manager: Manager for handling callbacks during generation.
+            **kwargs: Additional request-time parameters.
+
+        Returns:
+            The generated result from the model.
+        """
         payload = self._build_payload(messages, stop, **kwargs)
         resp = self._http.post_json(CHAT_COMPLETIONS_PATH, payload, stream=False)
         return self._parse_chat_result(resp.json())
@@ -950,6 +1087,18 @@ class ChatPollinations(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        """
+        Execute an asynchronous chat completion request.
+
+        Args:
+            messages: The sequence of messages to send to the model.
+            stop: Optional list of stop sequences.
+            run_manager: Async manager for handling callbacks.
+            **kwargs: Additional request-time parameters.
+
+        Returns:
+            The generated result from the model.
+        """
         payload = self._build_payload(messages, stop, **kwargs)
         resp = await self._http.apost_json(CHAT_COMPLETIONS_PATH, payload, stream=False)
         return self._parse_chat_result(resp.json())
@@ -961,6 +1110,18 @@ class ChatPollinations(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
+        """
+        Generate a synchronous stream of chat completion chunks.
+
+        Args:
+            messages: The sequence of messages to send to the model.
+            stop: Optional list of stop sequences.
+            run_manager: Manager for handling callbacks.
+            **kwargs: Additional request-time parameters.
+
+        Yields:
+            Individual chunks of the generated response as they arrive.
+        """
         payload = self._build_payload(messages, stop, **kwargs)
         payload["stream"] = True
 
@@ -978,7 +1139,13 @@ class ChatPollinations(BaseChatModel):
         emitted_final_usage = False
 
         def emit_final_usage_once() -> Iterator[ChatGenerationChunk]:
-            nonlocal emitted_final_usage
+            """
+            Create and yield a final chunk containing token usage metadata.
+
+            Yields:
+                A ChatGenerationChunk containing an AIMessageChunk with usage_metadata.
+            """
+            nonlocal emitted_final_usage  # Importante para obtener el valor actual
             if emitted_final_usage:
                 return iter([])
             if pending_usage_md is None:
@@ -994,7 +1161,7 @@ class ChatPollinations(BaseChatModel):
         with self._http.stream_post_json(CHAT_COMPLETIONS_PATH, payload) as r:
             self._http.raise_for_status(r)
             for evt in _iter_sse_json_events_sync(r):
-                if evt.get("done") is True:
+                if evt.get("__done__") is True:
                     break
 
                 # Monitorear el uso más reciente, pero sin adjuntarlo a chunks normales (evitar el conteo doble).
@@ -1066,6 +1233,18 @@ class ChatPollinations(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        """
+        Generate an asynchronous stream of chat completion chunks.
+
+        Args:
+            messages: The sequence of messages to send to the model.
+            stop: Optional list of stop sequences.
+            run_manager: Async manager for handling callbacks.
+            **kwargs: Additional request-time parameters.
+
+        Yields:
+            Individual chunks of the generated response as they arrive.
+        """
         payload = self._build_payload(messages, stop, **kwargs)
         payload["stream"] = True
 
@@ -1083,6 +1262,12 @@ class ChatPollinations(BaseChatModel):
         emitted_final_usage = False
 
         async def emit_final_usage_once() -> AsyncIterator[ChatGenerationChunk]:
+            """
+            Create and yield a final chunk containing token usage metadata asynchronously.
+
+            Yields:
+                A ChatGenerationChunk containing an AIMessageChunk with usage_metadata.
+            """
             nonlocal emitted_final_usage
             if emitted_final_usage or pending_usage_md is None:
                 return
@@ -1097,7 +1282,7 @@ class ChatPollinations(BaseChatModel):
         async with self._http.astream_post_json(CHAT_COMPLETIONS_PATH, payload) as r:
             self._http.raise_for_status(r)
             async for evt in _iter_sse_json_events_async(r):
-                if evt.get("done") is True:
+                if evt.get("__done__") is True:
                     break
 
                 if "usage" in evt and evt.get("usage") is not None:

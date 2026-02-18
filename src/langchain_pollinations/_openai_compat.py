@@ -1,3 +1,8 @@
+"""
+This module provides utilities and type definitions for OpenAI compatibility.
+It handles message normalization, tool call conversion, and audio format processing.
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,17 +10,15 @@ from typing import Any, Literal, TypedDict, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
-# Formatos permitidos por api.json para input_audio.format
+# API allowed formats for input_audio.format
 _ALLOWED_AUDIO_FORMATS = {"wav", "mp3", "flac", "opus", "pcm16"}
 
 
-# ============================================================================
-# TypedDicts para estructuras de respuesta (mejorar Type Safety)
-# ============================================================================
-
-
 class AudioTranscript(TypedDict, total=False):
-    """Audio output structure from chat completions."""
+    """
+    Structure for audio output data and transcripts from chat completions.
+    It includes fields for the raw transcript, base64 data, and expiration metadata.
+    """
     transcript: str
     data: str
     id: str
@@ -23,25 +26,37 @@ class AudioTranscript(TypedDict, total=False):
 
 
 class ContentBlockText(TypedDict):
-    """Text content block."""
+    """
+    Standard text content block structure for message parts.
+    Contains the literal type and the associated text string.
+    """
     type: Literal["text"]
     text: str
 
 
 class ContentBlockImageUrl(TypedDict):
-    """Image URL content block."""
+    """
+    Content block for image URLs including metadata.
+    Includes the URL and optional fields like detail or mime type.
+    """
     type: Literal["image_url"]
     image_url: dict[str, Any]  # {url: str, detail?: str, mime_type?: str}
 
 
 class ContentBlockThinking(TypedDict):
-    """Thinking/reasoning block (exposed by models like Claude, o1)."""
+    """
+    Specialized block for model reasoning and thinking processes.
+    Used by advanced models to expose internal reasoning steps before the final answer.
+    """
     type: Literal["thinking"]
     thinking: str
 
 
 class ContentBlockRedactedThinking(TypedDict):
-    """Redacted thinking block."""
+    """
+    Structure representing thinking data that has been redacted.
+    Used for compliance or safety reasons where reasoning traces are not fully exposed.
+    """
     type: Literal["redacted_thinking"]
     data: str
 
@@ -50,14 +65,20 @@ ContentBlock = ContentBlockText | ContentBlockImageUrl | ContentBlockThinking | 
 
 
 class ContentFilterDetail(TypedDict):
-    """Detail for a specific filter category."""
+    """
+    Detailed status of a specific content moderation filter category.
+    Tracks whether content was filtered, its severity, and detection status.
+    """
     filtered: bool
     severity: Literal["safe", "low", "medium", "high"] | None
     detected: bool | None
 
 
 class ContentFilterResult(TypedDict, total=False):
-    """Content filter results from the API."""
+    """
+    Aggregated content filter results for multiple safety categories.
+    Includes categories such as hate speech, self-harm, and protected material.
+    """
     hate: ContentFilterDetail
     self_harm: ContentFilterDetail
     sexual: ContentFilterDetail
@@ -68,20 +89,26 @@ class ContentFilterResult(TypedDict, total=False):
 
 
 class PromptFilterResultItem(TypedDict):
-    """Prompt filter result for a specific prompt index."""
+    """
+    Association of content filter results with a specific prompt index.
+    Allows identifying which part of a multi-prompt request triggered safety filters.
+    """
     prompt_index: int
     content_filter_results: ContentFilterResult
 
 
-# ============================================================================
-# Conversión de LangChain messages a formato OpenAI/Pollinations
-# ============================================================================
-
-
 def _lc_tool_call_to_openai_tool_call(tc: Any) -> dict[str, Any]:
     """
-    Convierte LangChain-like ToolCall dict a OpenAI tool_call dict:
-      {"id": "...", "type":"function", "function":{"name":"...", "arguments":"{...json...}"}}
+    Convert a LangChain tool call structure into an OpenAI-compatible dictionary.
+
+    Args:
+        tc: The tool call object, typically a dictionary from LangChain.
+
+    Returns:
+        A dictionary formatted according to the OpenAI tool call schema.
+
+    Raises:
+        TypeError: If the input is not a dictionary or compatible object.
     """
     if isinstance(tc, dict) and tc.get("type") == "function" and isinstance(tc.get("function"), dict):
         return cast(dict[str, Any], tc)
@@ -106,7 +133,15 @@ def _lc_tool_call_to_openai_tool_call(tc: Any) -> dict[str, Any]:
 
 
 def _to_jsonable(obj: Any) -> Any:
-    """Conversión a tipos de Python serializables en JSON."""
+    """
+    Recursively convert an object into JSON-serializable Python types.
+
+    Args:
+        obj: The object to be converted, which may include custom classes or models.
+
+    Returns:
+        A JSON-compatible representation (dict, list, str, int, etc.) of the input.
+    """
     if obj is None:
         return None
     if isinstance(obj, (str, int, float, bool)):
@@ -137,6 +172,15 @@ def _to_jsonable(obj: Any) -> Any:
 
 
 def _infer_audio_format_from_mime(mime_type: str) -> str | None:
+    """
+    Infer the short audio format string from a standard MIME type.
+
+    Args:
+        mime_type: The full MIME type string (e.g., "audio/mpeg").
+
+    Returns:
+        The normalized format string if recognized, otherwise None.
+    """
     mt = mime_type.strip().lower()
     if not mt:
         return None
@@ -165,14 +209,13 @@ def _infer_audio_format_from_mime(mime_type: str) -> str | None:
 
 def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
     """
-    Normaliza cualquier variante 'input_audio' para que cumpla:
-      {"type":"input_audio", "input_audio":{"data": "...base64...", "format":"mp3"}}
+    Ensure an audio content part follows the strictly expected API structure.
 
-    Acepta variantes comunes:
-      - ya-correcta: part["input_audio"] = {"data":..., "format":...}
-      - legacy/LC: part["base64"]=..., part["mime_type"]="audio/mp3"
-      - alt: part["data"]=..., part["format"]="mp3" (top-level)
-      - alt: part["audio"]={"data"/"base64", ...} (top-level)
+    Args:
+        part: A dictionary representing an audio message part in various possible formats.
+
+    Returns:
+        A normalized dictionary with specific "type" and "input_audio" keys.
     """
     data: str | None = None
     fmt: str | None = None
@@ -244,7 +287,13 @@ def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_content_part(part: Any) -> Any:
     """
-    Normaliza un content part a Pollinations/OpenAI chat.completions.
+    Normalize a single message content part into a format suitable for the API.
+
+    Args:
+        part: The content part to normalize, which can be a string, dict, or object.
+
+    Returns:
+        A dictionary representing the normalized content part with standard keys.
     """
     part = _to_jsonable(part)
     if not isinstance(part, dict):
@@ -290,6 +339,15 @@ def _normalize_content_part(part: Any) -> Any:
 
 
 def _normalize_message_content(content: Any) -> Any:
+    """
+    Normalize the entire content field of a message, handling both strings and lists.
+
+    Args:
+        content: The raw content from a LangChain message.
+
+    Returns:
+        The content formatted as a string or a list of normalized content parts.
+    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -299,11 +357,14 @@ def _normalize_message_content(content: Any) -> Any:
 
 def _extract_text_from_parts(content: Any, *, exclude_thinking: bool = False) -> str:
     """
-    Extrae texto de content parts.
+    Extract and concatenate all text segments from a collection of content parts.
 
     Args:
-        content: Content (string o lista de parts)
-        exclude_thinking: Si es True, excluye bloques de tipo 'thinking' y 'redacted_thinking'
+        content: A string or list of content parts to process.
+        exclude_thinking: Whether to ignore thinking and redacted thinking blocks.
+
+    Returns:
+        A single string containing the combined text from all relevant parts.
     """
     if isinstance(content, str):
         return content
@@ -331,7 +392,13 @@ def _extract_text_from_parts(content: Any, *, exclude_thinking: bool = False) ->
 
 def lc_messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, Any]]:
     """
-    Convierte mensajes LangChain a mensajes Pollinations/OpenAI-compatible chat.completions.
+    Convert a list of LangChain BaseMessage objects into OpenAI-compatible dictionaries.
+
+    Args:
+        messages: A sequence of LangChain messages (System, Human, AI, Tool).
+
+    Returns:
+        A list of dictionaries formatted for the chat completions API.
     """
     out: list[dict[str, Any]] = []
 
@@ -399,13 +466,25 @@ def lc_messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, Any]]:
 
 def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
     """
-    Convierte herramientas LangChain (BaseTool/StructuredTool/Pydantic model/TypedDict) al esquema:
-    {"type":"function","function":{"name":..., "description":..., "parameters":...}}
+    Transform various tool definitions into the standard OpenAI tool schema.
 
-    Garantía clave: cuando sea posible, "parameters" NO queda vacío ({}) para structured output.
+    Args:
+        tool: A tool definition (BaseTool, Pydantic model, TypedDict, or dict).
+
+    Returns:
+        A dictionary containing the "type" and "function" definition for the tool.
     """
 
     def _is_schema_empty(params: Any) -> bool:
+        """
+        Check if a JSON schema dictionary is effectively empty or lacks properties.
+
+        Args:
+            params: The schema dictionary to evaluate for content.
+
+        Returns:
+            True if the schema has no properties or relevant structural definitions.
+        """
         if not isinstance(params, dict):
             return True
         # schema vacío o sin propiedades útiles
@@ -420,6 +499,17 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
         return not (isinstance(req, list) and len(req) > 0)
 
     def _wrap_as_function(name: str, description: str | None, parameters: dict[str, Any]) -> dict[str, Any]:
+        """
+        Wrap function details into a standard OpenAI tool structure.
+
+        Args:
+            name: The name of the function.
+            description: An optional summary of what the function does.
+            parameters: The JSON schema defining the function's arguments.
+
+        Returns:
+            A dictionary formatted as a tool with type "function".
+        """
         fn: dict[str, Any] = {"name": name, "parameters": parameters}
         if isinstance(description, str) and description.strip():
             fn["description"] = description.strip()
@@ -539,6 +629,15 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
 
 
 def _safe_json_loads(s: str) -> Any:
+    """
+    Safely attempt to parse a JSON string, returning the original string on failure.
+
+    Args:
+        s: The string to be parsed as JSON.
+
+    Returns:
+        The parsed Python object if successful, or the original string if parsing fails.
+    """
     try:
         return json.loads(s)
     except Exception:

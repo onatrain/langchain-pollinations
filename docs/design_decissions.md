@@ -1,61 +1,45 @@
-# Decisiones de diseño de la API (langchain-pollinations)
+# Decisiones de Diseño API langchain-pollinations
 
-Este documento describe las decisiones de diseño que guían la **API pública** de la librería y cómo se espera que se use.
+Este documento detalla las decisiones de arquitectura y diseño que fundamentan la **API pública** y la estructura interna de la librería, asegurando consistencia con el ecosistema LangChain y la API de Pollinations.ai.
 
-## 1) Interfaz pública mínima y clara
+## 1) Interfaz pública minimalista
 
-- La librería expone solo cuatro “entradas” principales como API pública: `ChatPollinations`, `ImagePollinations`, `AccountInformation` y `ModelInformation`.
-- La intención es que el usuario pueda cubrir los 3 casos típicos (chat, imágenes, info de cuenta/modelos) sin conocer detalles internos (auth, http client, compat OpenAI, etc.).
-- Las utilidades internas viven en módulos “privados” (prefijo `_...`) para permitir cambios sin romper a usuarios.
+- **Superficie Reducida**: La librería expone únicamente cuatro puntos de entrada principales en `__init__.py`: `ChatPollinations`, `ImagePollinations`, `AccountInformation` y `ModelInformation`.
+- **Ocultamiento de Complejidad**: Módulos internos como `_client`, `_auth`, `_sse` y `_openai_compat` manejan la complejidad del transporte, autenticación y normalización de datos, permaneciendo invisibles para el usuario final.
+- **Jerarquía de Excepciones**: Se expone una única clase de error principal, `PollinationsAPIError`, que encapsula detalles HTTP y del backend (códigos de error, request ID, timestamps) para facilitar la depuración sin exponer excepciones de librerías subyacentes como `httpx`.
 
-Ejemplo de imports recomendados:
-```python
-from langchain_pollinations import ChatPollinations, ImagePollinations
-from langchain_pollinations import AccountInformation, ModelInformation
-```
+## 2) Integración Profunda con LangChain (Chat)
 
-## 2) Integración con LangChain (chat)
+- **Compatibilidad Nativa**: `ChatPollinations` hereda de `BaseChatModel`, soportando flujos estándar (`invoke`, `stream`, `batch`) y el sistema de mensajes de LangChain (`System`, `Human`, `AI`, `Tool`).
+- **Normalización Multimodal**:
+    - El modelo acepta contenido multimodal (imágenes, audio) en los mensajes.
+    - Internamente, `_openai_compat` normaliza estos inputs (base64, URLs) al formato estricto que espera la API, gestionando automáticamente tipos MIME y formatos de audio (`mp3`, `wav`, etc.).
+- **Soporte de "Reasoning"**: Se diseñó soporte explícito para bloques de pensamiento (`thinking` y `redacted_thinking`). Estos se preservan o filtran según la configuración, permitiendo acceder a la cadena de razonamiento de modelos avanzados.
 
-- `ChatPollinations` hereda de `BaseChatModel` para integrarse con el ecosistema LangChain: `invoke()`, `stream()`, callbacks, y el modelo de mensajes `HumanMessage/SystemMessage/AIMessage`.
-- La API de chat usa el endpoint OpenAI-compatible `/v1/chat/completions` como “contrato” de request/response, pero sin obligar al usuario a hablar “OpenAI JSON”; se aceptan mensajes LangChain y se convierten internamente.
-- Se soporta “tool calling” vía `bind_tools()`, transformando herramientas a formato OpenAI `tools=[{type:"function", function:{...}}]`.
+## 3) Configuración Estricta y Tipada (Pydantic)
 
-## 3) Configuración: estricta y validada (Pydantic)
+- **Validación en Tiempo de Ejecución**: Todos los parámetros de configuración (tanto para chat como para generación de imágenes) se definen mediante modelos Pydantic (`ChatPollinationsConfig`, `ImagePromptParams`).
+- **Política de "Extra Forbid"**: Se configura `extra="forbid"` en los modelos de configuración para rechazar inmediatamente parámetros desconocidos o mal escritos, evitando errores silenciosos en las peticiones a la API.
+- **Separación de Responsabilidades**: En el constructor de `ChatPollinations`, se distinguen explícitamente los parámetros de configuración de la API (pasados a `request_defaults`) de los parámetros de configuración de LangChain (callbacks, tags).
 
-- Los parámetros del request body de `/v1/chat/completions` se modelan con `ChatPollinationsConfig` (Pydantic) y se valida con `extra="forbid"` para detectar campos inválidos/typos temprano.
-- `ChatPollinations.__init__` separa explícitamente:
-  - kwargs que pertenecen al request (se validan contra `ChatPollinationsConfig`),
-  - kwargs que pertenecen al `BaseChatModel` (callbacks, tags, metadata, etc.).
-- Se ofrece `request_defaults` para configurar defaults “de sesión” sin repetir parámetros en cada llamada.
+## 4) Generación de Imágenes: Fluent Interface
 
-## 4) Autenticación simple y explícita
+- **Inmutabilidad y Encadenamiento**: `ImagePollinations` implementa un patrón "Fluent Interface" mediante el método `with_params()`. Esto permite crear nuevas instancias pre-configuradas (ej. un generador específico para "pixel art") sin mutar el objeto original.
+- **Abstracción de Query Params**: La clase `ImagePromptParams` mapea y valida los numerosos parámetros de URL (`seed`, `width`, `height`, `model`, `enhance`) antes de construir la query string, asegurando que solo se envíen valores válidos.
 
-- La API key se obtiene desde:
-  1) el argumento `api_key=...` si se pasa,
-  2) o la variable de entorno `POLLINATIONS_API_KEY`.
-- Si no hay key, se falla rápido con un `ValueError` con mensaje claro (evita “silent misconfig”).
+## 5) Transporte HTTP Robusto y Centralizado
 
-## 5) Transporte HTTP: httpx, sync/async, errores consistentes
+- **Cliente Unificado**: `PollinationsHttpClient` centraliza toda la lógica de red, manejando tanto peticiones síncronas como asíncronas sobre `httpx`.
+- **Manejo de Errores Estructurado**: El cliente parsea automáticamente las respuestas de error JSON del backend, poblando `PollinationsAPIError` con detalles estructurados (`details`, `cause`, `requestId`) en lugar de solo texto plano.
+- **Seguridad en Logging**: El sistema de logging interno redacta automáticamente headers sensibles (`Authorization`) para evitar fugas de credenciales en los logs de depuración.
 
-- Todo el transporte HTTP se centraliza en `PollinationsHttpClient` (interno), construido con:
-  - `HttpConfig(base_url, timeout_s)` para parametrizar host y timeout,
-  - `httpx.Client` y `httpx.AsyncClient` para soportar sync y async en paralelo.
-- Los wrappers públicos reflejan esa decisión:
-  - Chat: `_generate/_agenerate`, `_stream/_astream`
-  - Imágenes: `generate/agenerate`
-  - Modelos: `list_*/alist_*`
-- Los errores HTTP no-2xx se elevan como `PollinationsAPIError(status_code, message, body)` para tener una excepción estable y fácil de inspeccionar.
+## 6) Streaming y Eventos (SSE)
 
-## 6) Streaming (SSE): pragmático y compatible
+- **Parsing Resiliente**: Se implementó un parser SSE ligero (`_sse.py`) que maneja la transmisión de eventos.
+- **Reconstrucción de Deltas**: En el modo streaming, la librería es capaz de reconstruir objetos complejos (como `content_blocks` para thinking o tool calls fragmentados) a partir de los deltas parciales recibidos.
+- **Preservación de Datos**: Se decidió incluir opciones como `preserve_multimodal_deltas` para no perder información rica (audio, imágenes) durante la transmisión por chunks.
 
-- El streaming de chat usa `Accept: text/event-stream` y consume el stream iterando líneas `data: ...`, parseando JSON por evento.
-- Se incluye un parser SSE mínimo (`iter_sse_events_from_text`) pensado para pruebas unitarias o parsing offline (no para “streaming real” de red).
-- El diseño privilegia:
-  - entregar chunks compatibles con LangChain (`AIMessageChunk`/`ChatGenerationChunk`),
-  - y mantener el parsing SSE lo suficientemente simple para debug y mantenimiento.
+## 7) Tool Calling Adaptativo
 
-## 7) Imagen, modelos y cuenta: wrappers delgados
-
-- `ImagePollinations` es un wrapper directo de `GET /image/{prompt}` y retorna `bytes` (no intenta adivinar formato final).
-- `ModelInformation` encapsula endpoints de listado (`/v1/models`, `/text/models`, `/image/models`) para que el usuario descubra modelos sin hardcodear.
-- `AccountInformation` encapsula endpoints `/account/*` y tipa parámetros de query con Pydantic (`format`, `limit`, etc.) con validación estricta.
+- **Conversión Bidireccional**: La librería no solo convierte definiciones de herramientas de LangChain al formato OpenAI, sino que también implementa lógica específica (`_lc_tool_call_to_openai_tool_call`) para adaptar las llamadas a las particularidades del proveedor (ej. evitar el campo `name` en mensajes de respuesta de herramientas).
+- **Inferencia de Esquemas**: Se soporta la inferencia automática de esquemas JSON para herramientas definidas como funciones Python, modelos Pydantic o diccionarios `TypedDict`.

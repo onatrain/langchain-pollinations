@@ -18,10 +18,6 @@ from langchain_pollinations._openai_compat import (
 from langchain_pollinations.chat import AudioConfig
 
 
-# ************************************************************************
-# Fixtures y Helpers
-# ************************************************************************
-
 @pytest.fixture(scope="module")
 def api_key() -> str:
     """Carga la API key desde el archivo .env"""
@@ -70,10 +66,6 @@ def extract_audio_from_message(message: AIMessage) -> AudioTranscript | None:
     return None
 
 
-# ************************************************************************
-# Test 1: Text -> Text (Generación de texto estándar)
-# ************************************************************************
-
 def test_text_to_text_generation(api_key: str):
     """
     Test 1: Generación de texto con openai-fast (2-3 párrafos).
@@ -107,10 +99,6 @@ def test_text_to_text_generation(api_key: str):
     print(f"\n✓ Test 1 pasado. Texto generado ({len(text)} chars):")
     print(text[:200] + "...")
 
-
-# ************************************************************************
-# Test 2: Text -> Audio (Generación de audio/TTS)
-# ************************************************************************
 
 def test_text_to_audio_generation(api_key: str):
     """
@@ -159,10 +147,6 @@ def test_text_to_audio_generation(api_key: str):
     pytest.test_audio_transcript = audio.get("transcript", "")
 
 
-# ************************************************************************
-# Test 3: Text + Audio -> Text (Transcripción de audio)
-# ************************************************************************
-
 def test_audio_transcription(api_key: str):
     """
     Test 3: Transcripción de audio usando openai-audio.
@@ -205,10 +189,6 @@ def test_audio_transcription(api_key: str):
         assert len(common) > 0, f"Transcripción muy diferente del original. Original: {original}, Transcrito: {transcribed}"
 
 
-# ************************************************************************
-# Test 4: Text + Audio -> Text (Pregunta sobre audio)
-# ************************************************************************
-
 def test_audio_question_answering(api_key: str):
     """
     Test 4: Hacer una pregunta sobre el contenido de un audio.
@@ -236,10 +216,6 @@ def test_audio_question_answering(api_key: str):
 
     print(f"\n✓ Test 4 pasado. Respuesta: '{text}'")
 
-
-# ************************************************************************
-# Test 5: Text + Image (local) -> Text (Visión)
-# ************************************************************************
 
 def test_vision_local_image(api_key: str):
     """
@@ -273,10 +249,6 @@ def test_vision_local_image(api_key: str):
     print(text[:300])
 
 
-# ************************************************************************
-# Test 6: Text + Image (remote) -> Text (Visión)
-# ************************************************************************
-
 def test_vision_remote_image_single(api_key: str):
     """
     Test 6: Descripción de imagen remota usando modelo openai.
@@ -303,10 +275,6 @@ def test_vision_remote_image_single(api_key: str):
     print(f"\n✓ Test 6 pasado. Descripción de imagen remota:")
     print(text[:300])
 
-
-# ************************************************************************
-# Test 7: Text + 2 Images (remote) -> Text (Comparación de imágenes)
-# ************************************************************************
 
 def test_vision_multiple_images(api_key: str):
     """
@@ -341,10 +309,6 @@ def test_vision_multiple_images(api_key: str):
     print(text[:400])
 
 
-# ************************************************************************
-# Test 8: Text + Image (remote) -> Text (OCR con gemini-fast)
-# ************************************************************************
-
 def test_vision_ocr_text_extraction(api_key: str):
     """
     Test 8: Extracción de texto de imagen (OCR) usando modelo gemini-fast.
@@ -375,10 +339,6 @@ def test_vision_ocr_text_extraction(api_key: str):
     print(f"\n✓ Test 8 pasado. Texto extraído de imagen (OCR):")
     print(text[:500])
 
-
-# ************************************************************************
-# Test 9: Thinking mode
-# ************************************************************************
 
 def test_thinking_blocks_with_empty_content(api_key: str):
     """
@@ -433,10 +393,6 @@ def test_thinking_blocks_with_empty_content(api_key: str):
         print(f"  content_blocks: {len(content_blocks)} bloques")
 
 
-# ************************************************************************
-# Test 10: Streaming mode
-# ************************************************************************
-
 def test_streaming_empty_content_with_blocks(api_key: str):
     """
     Verifica que en streaming, deltas con content="" + content_blocks
@@ -482,10 +438,6 @@ def test_streaming_empty_content_with_blocks(api_key: str):
         assert len(text_content) > 0, "No se recibió contenido en el streaming"
         print(f"  Contenido textual total: {len(text_content)} chars")
 
-
-# ************************************************************************
-# Test 11: Verificar manejo de content_blocks con TypedDicts
-# ************************************************************************
 
 def test_content_blocks_handling(api_key: str):
     """
