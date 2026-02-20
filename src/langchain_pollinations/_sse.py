@@ -5,8 +5,8 @@ Designed primarily for simple string-based event processing.
 
 from __future__ import annotations
 
-from typing import Iterator
 from dataclasses import dataclass
+from typing import Iterator
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +15,7 @@ class SSEEvent:
     Data structure representing a single Server-Sent Event (SSE).
     Stores the raw string content associated with the 'data' field.
     """
+
     data: str
 
 

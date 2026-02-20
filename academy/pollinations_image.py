@@ -107,9 +107,10 @@ if __name__ == "__main__":
     # Configuración
     import dotenv, os
 
-    dotenv.load_dotenv()
+    # dotenv.load_dotenv()
 
-    API_KEY = os.getenv("POLLINATIONS_API_KEY")
+    # API_KEY = os.getenv("POLLINATIONS_API_KEY")
+    API_KEY = "plomo al hampa"
     IMAGE_FILE = "groovy.jpg"     # Reemplaza con la ruta a tu imagen JPEG
     MODEL = "gemini-fast"
 

@@ -17,6 +17,7 @@ class AuthConfig:
     Configuration container for Pollinations API authentication credentials.
     Ensures the API key is present and provides a centralized access point.
     """
+
     api_key: str
 
     @staticmethod
@@ -34,6 +35,9 @@ class AuthConfig:
             ValueError: If no API key is found in both the argument and environment.
         """
         key = api_key or os.getenv(ENV_API_KEY)
+
         if not key:
-            raise ValueError("API key missing. Define POLLINATIONS_API_KEY in environment or pass api_key value")
+            raise ValueError(
+                "API key missing. Define POLLINATIONS_API_KEY in environment or pass api_key value"
+            )
         return AuthConfig(api_key=key)

@@ -5,11 +5,10 @@ It includes support for profile details, balance checks, API keys, and detailed 
 
 from __future__ import annotations
 
-import httpx
-
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, Optional
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from langchain_pollinations._auth import AuthConfig
@@ -26,6 +25,7 @@ class AccountUsageParams(BaseModel):
     Configuration parameters for fetching detailed account usage logs.
     Supports filtering by date, limit, and output format (JSON or CSV).
     """
+
     model_config = ConfigDict(extra="forbid")
     format: AccountFormat = "json"
     limit: Limit1To50000 = 100
@@ -37,6 +37,7 @@ class AccountUsageDailyParams(BaseModel):
     Configuration parameters for fetching daily aggregated account usage.
     Allows specifying the desired output format for the daily usage report.
     """
+
     model_config = ConfigDict(extra="forbid")
     format: AccountFormat = "json"
 
@@ -47,6 +48,7 @@ class AccountInformation:
     Main interface for interacting with Pollinations account-related endpoints.
     Provides synchronous and asynchronous methods to access profile, balance, and usage data.
     """
+
     api_key: str | None = None
     base_url: str = DEFAULT_BASE_URL
     timeout_s: float = 120.0
@@ -127,7 +129,9 @@ class AccountInformation:
         response = self._http.get("/account/usage", params=q)
         return self._parse_response(response)
 
-    def get_usage_daily(self, params: AccountUsageDailyParams | None = None) -> dict[str, Any] | str:
+    def get_usage_daily(
+        self, params: AccountUsageDailyParams | None = None
+    ) -> dict[str, Any] | str:
         """
         Fetch daily aggregated account usage statistics synchronously.
 
@@ -171,9 +175,7 @@ class AccountInformation:
         response = await self._http.aget("/account/key")
         return response.json()
 
-    async def aget_usage(
-        self, params: AccountUsageParams | None = None
-    ) -> dict[str, Any] | str:
+    async def aget_usage(self, params: AccountUsageParams | None = None) -> dict[str, Any] | str:
         """
         Fetch detailed account usage records asynchronously.
 

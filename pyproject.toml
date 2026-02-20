@@ -4,11 +4,23 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-pollinations"
-version = "0.2.4"
+version = "0.2.5b1"  # PEP 440
 description = "LangChain provider for Pollinations unified API (OpenAI-compatible chat completions + image endpoint)."
-requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Your Name" }]
+authors = [{ name = "onatrain" }]
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["langchain", "pollinations", "ai", "llm", "multimodal", "agents", "function-calling"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "langchain-core>=1.0.0",
   "pydantic>=2.6.0",
@@ -16,17 +28,37 @@ dependencies = [
   "typing-extensions>=4.10.0",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/langchain_pollinations"]
-
-[tool.hatch.build]
-include = [
-  "src/langchain_pollinations/py.typed",
-]
+[project.urls]
+Documentation = "https://github.com/onatrain/langchain-pollinations/blob/main/docs/api_reference.md"
+Repository = "https://github.com/onatrain/langchain-pollinations"
+Changelog = "https://github.com/onatrain/langchain-pollinations/blob/main/CHANGELOG.md"
 
 # Entry point para que LangChain pueda descubrir el chat model.
 [project.entry-points."langchain.chatmodels"]
 pollinations = "langchain_pollinations.chat:ChatPollinations"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langchain_pollinations"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    # Root
+    ".env.example",
+    ".gitignore",
+    "CHANGELOG.md",
+    "LICENSE.md",
+    "pyproject.toml",
+    "README.md",
+    "uv.lock",
+    # Directorios
+    "academy/**",
+    "assets/**",
+    "debugging/**",
+    "docs/**",
+    "examples/**",
+    "src/**",
+    "tests/**",
+]
 
 [tool.ruff]
 line-length = 100
@@ -84,4 +116,6 @@ dev = [
   "pydantic[email]>=2.12.5",
   "pytest-cov>=7.0.0",
   "grip>=4.6.2",
+  "pathspec>=1.0.4",
+  "twine>=6.2.0",
 ]

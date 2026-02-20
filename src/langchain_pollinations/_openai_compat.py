@@ -19,6 +19,7 @@ class AudioTranscript(TypedDict, total=False):
     Structure for audio output data and transcripts from chat completions.
     It includes fields for the raw transcript, base64 data, and expiration metadata.
     """
+
     transcript: str
     data: str
     id: str
@@ -30,6 +31,7 @@ class ContentBlockText(TypedDict):
     Standard text content block structure for message parts.
     Contains the literal type and the associated text string.
     """
+
     type: Literal["text"]
     text: str
 
@@ -39,6 +41,7 @@ class ContentBlockImageUrl(TypedDict):
     Content block for image URLs including metadata.
     Includes the URL and optional fields like detail or mime type.
     """
+
     type: Literal["image_url"]
     image_url: dict[str, Any]  # {url: str, detail?: str, mime_type?: str}
 
@@ -48,6 +51,7 @@ class ContentBlockThinking(TypedDict):
     Specialized block for model reasoning and thinking processes.
     Used by advanced models to expose internal reasoning steps before the final answer.
     """
+
     type: Literal["thinking"]
     thinking: str
 
@@ -57,11 +61,18 @@ class ContentBlockRedactedThinking(TypedDict):
     Structure representing thinking data that has been redacted.
     Used for compliance or safety reasons where reasoning traces are not fully exposed.
     """
+
     type: Literal["redacted_thinking"]
     data: str
 
 
-ContentBlock = ContentBlockText | ContentBlockImageUrl | ContentBlockThinking | ContentBlockRedactedThinking | dict[str, Any]
+ContentBlock = (
+    ContentBlockText
+    | ContentBlockImageUrl
+    | ContentBlockThinking
+    | ContentBlockRedactedThinking
+    | dict[str, Any]
+)
 
 
 class ContentFilterDetail(TypedDict):
@@ -69,6 +80,7 @@ class ContentFilterDetail(TypedDict):
     Detailed status of a specific content moderation filter category.
     Tracks whether content was filtered, its severity, and detection status.
     """
+
     filtered: bool
     severity: Literal["safe", "low", "medium", "high"] | None
     detected: bool | None
@@ -79,6 +91,7 @@ class ContentFilterResult(TypedDict, total=False):
     Aggregated content filter results for multiple safety categories.
     Includes categories such as hate speech, self-harm, and protected material.
     """
+
     hate: ContentFilterDetail
     self_harm: ContentFilterDetail
     sexual: ContentFilterDetail
@@ -93,6 +106,7 @@ class PromptFilterResultItem(TypedDict):
     Association of content filter results with a specific prompt index.
     Allows identifying which part of a multi-prompt request triggered safety filters.
     """
+
     prompt_index: int
     content_filter_results: ContentFilterResult
 
@@ -110,7 +124,11 @@ def _lc_tool_call_to_openai_tool_call(tc: Any) -> dict[str, Any]:
     Raises:
         TypeError: If the input is not a dictionary or compatible object.
     """
-    if isinstance(tc, dict) and tc.get("type") == "function" and isinstance(tc.get("function"), dict):
+    if (
+        isinstance(tc, dict)
+        and tc.get("type") == "function"
+        and isinstance(tc.get("function"), dict)
+    ):
         return cast(dict[str, Any], tc)
 
     if not isinstance(tc, dict):
@@ -225,7 +243,12 @@ def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
     if isinstance(ia, dict):
         data = ia.get("data")
         fmt = ia.get("format")
-        if isinstance(data, str) and data and isinstance(fmt, str) and fmt in _ALLOWED_AUDIO_FORMATS:
+        if (
+            isinstance(data, str)
+            and data
+            and isinstance(fmt, str)
+            and fmt in _ALLOWED_AUDIO_FORMATS
+        ):
             out = dict(part)
             out["type"] = "input_audio"
             out["input_audio"] = {"data": data, "format": fmt}
@@ -419,7 +442,11 @@ def lc_messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, Any]]:
         # Si es ToolMessage: el API es más estricto, mandar string y evitar `name`
         if isinstance(m, ToolMessage):
             content = _extract_text_from_parts(content)  # <- string
-            msg: dict[str, Any] = {"role": "tool", "content": content, "tool_call_id": m.tool_call_id}
+            msg: dict[str, Any] = {
+                "role": "tool",
+                "content": content,
+                "tool_call_id": m.tool_call_id,
+            }
             # NO incluir msg["name"]
         else:
             msg = {"role": role, "content": content}
@@ -498,7 +525,9 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
         req = params.get("required")
         return not (isinstance(req, list) and len(req) > 0)
 
-    def _wrap_as_function(name: str, description: str | None, parameters: dict[str, Any]) -> dict[str, Any]:
+    def _wrap_as_function(
+        name: str, description: str | None, parameters: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Wrap function details into a standard OpenAI tool structure.
 
@@ -521,7 +550,7 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
 
     # 1) Mejor ruta: convertidor oficial de LangChain (maneja más casos que nuestras heurísticas)
     try:
-        from langchain_core.utils.function_calling import convert_to_openai_tool as _lc_convert  # type: ignore
+        from langchain_core.utils.function_calling import convert_to_openai_tool as _lc_convert
     except Exception:
         _lc_convert = None  # type: ignore
 
@@ -530,15 +559,21 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
             converted = _lc_convert(tool)
             if isinstance(converted, dict):
                 # Caso A: ya viene como {"type":"function","function":{...}}
-                if converted.get("type") == "function" and isinstance(converted.get("function"), dict):
+                if converted.get("type") == "function" and isinstance(
+                    converted.get("function"), dict
+                ):
                     fn = converted.get("function") or {}
                     params = fn.get("parameters")
                     # Si el schema quedó vacío, seguimos intentando inferirlo abajo
                     if not _is_schema_empty(params):
-                        return cast(dict[str, Any], converted)
+                        return converted
 
                 # Caso B: algunas versiones devuelven {"name","description","parameters"}
-                if "name" in converted and "parameters" in converted and isinstance(converted.get("name"), str):
+                if (
+                    "name" in converted
+                    and "parameters" in converted
+                    and isinstance(converted.get("name"), str)
+                ):
                     params = converted.get("parameters")
                     if isinstance(params, dict) and not _is_schema_empty(params):
                         return _wrap_as_function(
@@ -551,7 +586,9 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
 
     # 2) Fallback robusto: intentar inferir schema de Pydantic/TypedDict/typing
     name = getattr(tool, "name", None) or getattr(tool, "__name__", None) or "Tool"
-    description = getattr(tool, "description", None) or (getattr(tool, "__doc__", "") or "").strip() or None
+    description = (
+        getattr(tool, "description", None) or (getattr(tool, "__doc__", "") or "").strip() or None
+    )
 
     # default (si no podemos inferir)
     parameters: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
@@ -598,13 +635,13 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
     # 2.4) Pydantic model class (BaseModel)
     if _is_schema_empty(parameters):
         try:
-            from pydantic import BaseModel  # type: ignore
+            from pydantic import BaseModel
         except Exception:
             BaseModel = None  # type: ignore
 
         try:
-            if BaseModel is not None and isinstance(tool, type) and issubclass(tool, BaseModel):  # type: ignore[arg-type]
-                candidate = cast(dict[str, Any], tool.model_json_schema())  # type: ignore[attr-defined]
+            if BaseModel is not None and isinstance(tool, type) and issubclass(tool, BaseModel):
+                candidate = tool.model_json_schema()
                 if not _is_schema_empty(candidate):
                     parameters = candidate
         except Exception:
@@ -613,19 +650,21 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
     # 2.5) TypedDict / typing types via TypeAdapter (Pydantic v2)
     if _is_schema_empty(parameters):
         try:
-            from pydantic import TypeAdapter  # type: ignore
+            from pydantic import TypeAdapter
         except Exception:
             TypeAdapter = None  # type: ignore
 
         if TypeAdapter is not None:
             try:
-                candidate = cast(dict[str, Any], TypeAdapter(tool).json_schema())  # type: ignore[misc]
+                candidate = TypeAdapter(tool).json_schema()
                 if not _is_schema_empty(candidate):
                     parameters = candidate
             except Exception:
                 pass
 
-    return _wrap_as_function(name=str(name), description=cast(str | None, description), parameters=parameters)
+    return _wrap_as_function(
+        name=str(name), description=cast(str | None, description), parameters=parameters
+    )
 
 
 def _safe_json_loads(s: str) -> Any:

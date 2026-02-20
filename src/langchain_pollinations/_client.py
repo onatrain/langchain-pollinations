@@ -22,6 +22,7 @@ class HttpConfig:
     Configuration settings for the HTTP client.
     Includes base URL and timeout durations for network requests.
     """
+
     base_url: str
     timeout_s: float = 120.0
 
@@ -98,10 +99,7 @@ def _parse_error_response(
 
     if isinstance(error_obj, dict):
         error_code = error_obj.get("code")
-        if isinstance(error_code, str):
-            error_code = error_code.strip()
-        else:
-            error_code = None
+        error_code = error_code.strip() if isinstance(error_code, str) else None
 
         msg = error_obj.get("message")
         if isinstance(msg, str) and msg.strip():
@@ -153,7 +151,12 @@ class PollinationsHttpClient:
         """
         self._config = config
         self._api_key = api_key
-        self._debug_http = os.getenv("POLLINATIONS_HTTP_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+        self._debug_http = os.getenv("POLLINATIONS_HTTP_DEBUG", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
         def _redact_headers(headers: dict[str, Any]) -> dict[str, Any]:
             """
@@ -184,7 +187,9 @@ class PollinationsHttpClient:
             logging.warning("HTTPX REQUEST headers=%s", _redact_headers(dict(request.headers)))
             if request.content:
                 try:
-                    logging.warning("HTTPX REQUEST body=%s", request.content.decode("utf-8", "ignore"))
+                    logging.warning(
+                        "HTTPX REQUEST body=%s", request.content.decode("utf-8", "ignore")
+                    )
                 except Exception:
                     logging.warning("HTTPX REQUEST body=(binary) len=%s", len(request.content))
 
@@ -246,10 +251,15 @@ class PollinationsHttpClient:
         EventHooksDict = dict[str, list[Callable[..., Any]]]
 
         hooks_sync: EventHooksDict = {"request": [_log_request], "response": [_log_response_sync]}
-        hooks_async: EventHooksDict = {"request": [_log_request_async], "response": [_log_response_async]}
+        hooks_async: EventHooksDict = {
+            "request": [_log_request_async],
+            "response": [_log_response_async],
+        }
 
         self._client = httpx.Client(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks_sync)
-        self._aclient = httpx.AsyncClient(timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks_async)
+        self._aclient = httpx.AsyncClient(
+            timeout=httpx.Timeout(config.timeout_s), event_hooks=hooks_async
+        )
 
     def close(self) -> None:
         """
@@ -308,7 +318,9 @@ class PollinationsHttpClient:
 
         raise error
 
-    def post_json(self, path: str, payload: dict[str, Any], *, stream: bool = False) -> httpx.Response:
+    def post_json(
+        self, path: str, payload: dict[str, Any], *, stream: bool = False
+    ) -> httpx.Response:
         """
         Execute a synchronous POST request with a JSON payload.
 
@@ -327,7 +339,9 @@ class PollinationsHttpClient:
         self.raise_for_status(resp)
         return resp
 
-    async def apost_json(self, path: str, payload: dict[str, Any], *, stream: bool = False) -> httpx.Response:
+    async def apost_json(
+        self, path: str, payload: dict[str, Any], *, stream: bool = False
+    ) -> httpx.Response:
         """
         Execute an asynchronous POST request with a JSON payload.
 

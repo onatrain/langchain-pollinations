@@ -20,6 +20,7 @@ class ModelInformation:
     Handles retrieval and parsing of available models from the Pollinations API.
     Provides methods to list compatible, text-based, and image-based models.
     """
+
     api_key: str | None = None
     base_url: str = DEFAULT_BASE_URL
     timeout_s: float = 120.0

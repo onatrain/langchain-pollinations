@@ -48,6 +48,7 @@ class ImagePromptParams(BaseModel):
     Data structure representing the official query parameters for image generation.
     Includes configuration for model, dimensions, seed, and model-specific options.
     """
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     model: ImageModelId = "zimage"
@@ -94,6 +95,7 @@ class ImagePollinations(BaseModel):
     Configurable wrapper for the Pollinations image generation endpoint.
     Supports both synchronous and asynchronous operations with LangChain integration.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", populate_by_name=True)
 
     # Auth / transporte
@@ -157,8 +159,19 @@ class ImagePollinations(BaseModel):
         """
         out: dict[str, Any] = {}
         for k in (
-            "model", "width", "height", "seed", "enhance", "negative_prompt", "safe",
-            "quality", "image", "transparent", "duration", "aspectRatio", "audio",
+            "model",
+            "width",
+            "height",
+            "seed",
+            "enhance",
+            "negative_prompt",
+            "safe",
+            "quality",
+            "image",
+            "transparent",
+            "duration",
+            "aspectRatio",
+            "audio",
         ):
             # Manejo de alias aspectRatio
             if k == "aspectRatio":
@@ -193,7 +206,9 @@ class ImagePollinations(BaseModel):
         validated = ImagePromptParams(**merged)
         return validated.to_query()
 
-    def generate_response(self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> httpx.Response:
+    def generate_response(
+        self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any
+    ) -> httpx.Response:
         """
         Execute a synchronous request to the image generation endpoint.
 
@@ -227,7 +242,9 @@ class ImagePollinations(BaseModel):
         q = self._build_query(params, **kwargs)
         return await self._http.aget(f"/image/{encoded}", params=q)
 
-    def generate(self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> bytes:
+    def generate(
+        self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any
+    ) -> bytes:
         """
         Generate an image synchronously and return the raw bytes.
 
@@ -241,7 +258,9 @@ class ImagePollinations(BaseModel):
         """
         return self.generate_response(prompt, params=params, **kwargs).content
 
-    async def agenerate(self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> bytes:
+    async def agenerate(
+        self, prompt: str, *, params: dict[str, Any] | None = None, **kwargs: Any
+    ) -> bytes:
         """
         Generate an image asynchronously and return the raw bytes.
 

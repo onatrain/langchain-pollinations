@@ -4,6 +4,7 @@ It provides structured error handling for Pollinations API responses and general
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +37,7 @@ class PollinationsAPIError(PollinationsError):
 
     Structured fields are automatically parsed from JSON error envelopes for easy debugging.
     """
+
     status_code: int
     message: str
     body: str | None = None

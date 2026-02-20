@@ -7,7 +7,19 @@ from __future__ import annotations
 
 import contextlib
 import json
-from typing import Annotated, Any, AsyncIterator, Callable, Iterator, Literal, Optional, Sequence, SupportsInt, Union, cast
+from typing import (
+    Annotated,
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    Literal,
+    Optional,
+    Sequence,
+    SupportsInt,
+    Union,
+    cast,
+)
 
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models.base import LanguageModelInput
@@ -63,10 +75,42 @@ Modality = Literal["text", "audio"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
 VoiceId = Literal[
-    "alloy", "echo", "fable", "onyx", "shimmer", "coral", "verse", "ballad", "ash", "sage",
-    "amuch", "dan", "rachel", "domi", "bella", "elli", "charlotte", "dorothy", "sarah",
-    "emily", "lily", "matilda", "adam", "antoni", "arnold", "josh", "sam", "daniel",
-    "charlie", "james", "fin", "callum", "liam", "george", "brian", "bill"
+    "alloy",
+    "echo",
+    "fable",
+    "onyx",
+    "shimmer",
+    "coral",
+    "verse",
+    "ballad",
+    "ash",
+    "sage",
+    "amuch",
+    "dan",
+    "rachel",
+    "domi",
+    "bella",
+    "elli",
+    "charlotte",
+    "dorothy",
+    "sarah",
+    "emily",
+    "lily",
+    "matilda",
+    "adam",
+    "antoni",
+    "arnold",
+    "josh",
+    "sam",
+    "daniel",
+    "charlie",
+    "james",
+    "fin",
+    "callum",
+    "liam",
+    "george",
+    "brian",
+    "bill",
 ]
 
 AudioFormat = Literal["wav", "mp3", "flac", "opus", "pcm16"]
@@ -86,6 +130,7 @@ class AudioConfig(BaseModel):
     Configuration for audio generation parameters.
     Defines the voice and audio format used for spoken model outputs.
     """
+
     model_config = ConfigDict(extra="forbid")
     voice: VoiceId
     format: AudioFormat
@@ -96,6 +141,7 @@ class StreamOptions(BaseModel):
     Options for controlling streaming behavior.
     Includes settings for whether to include token usage statistics in the stream.
     """
+
     model_config = ConfigDict(extra="allow")
     include_usage: Optional[bool] = None
 
@@ -105,6 +151,7 @@ class ThinkingConfig(BaseModel):
     Configuration for models with internal reasoning capabilities.
     Allows enabling or disabling thinking and setting a token budget for reasoning.
     """
+
     model_config = ConfigDict(extra="allow")
     type: Literal["enabled", "disabled"] = "disabled"
     budget_tokens: Optional[Annotated[int, Field(ge=1, le=INT53_MAX)]] = None
@@ -115,6 +162,7 @@ class ResponseFormatText(BaseModel):
     Schema for a plain text response format.
     Ensures the model returns response data as a standard text string.
     """
+
     model_config = ConfigDict(extra="allow")
     type: Literal["text"]
 
@@ -124,6 +172,7 @@ class ResponseFormatJsonObject(BaseModel):
     Schema for a JSON object response format.
     Instructs the model to output a valid JSON object.
     """
+
     model_config = ConfigDict(extra="allow")
     type: Literal["json_object"]
 
@@ -133,6 +182,7 @@ class ResponseFormatJsonSchemaObject(BaseModel):
     Detailed structure for defining a specific JSON schema for the response.
     Includes schema definitions, name, description, and strict validation flags.
     """
+
     model_config = ConfigDict(extra="allow", populate_by_name=True)
     description: Optional[str] = None
     name: Optional[str] = None
@@ -145,6 +195,7 @@ class ResponseFormatJsonSchema(BaseModel):
     Top-level schema for JSON-based structured output.
     Contains the nested JSON schema object used for model guidance.
     """
+
     model_config = ConfigDict(extra="allow")
     type: Literal["json_schema"]
     json_schema: ResponseFormatJsonSchemaObject
@@ -158,6 +209,7 @@ class ToolFunction(BaseModel):
     Definition of a function-based tool.
     Contains the name, description, parameters, and optional strictness flags.
     """
+
     model_config = ConfigDict(extra="allow")
     name: str
     description: Optional[str] = None
@@ -170,6 +222,7 @@ class ToolFunctionTool(BaseModel):
     Wrapper for a function tool within the API tool schema.
     Specifies the tool type as 'function' and contains the associated logic.
     """
+
     model_config = ConfigDict(extra="allow")
     type: Literal["function"]
     function: ToolFunction
@@ -190,6 +243,7 @@ class ToolBuiltinTool(BaseModel):
     Reference to a pre-defined builtin tool provided by the platform.
     Specifies the type of builtin tool, such as search or code execution.
     """
+
     model_config = ConfigDict(extra="allow")
     type: BuiltinToolType
 
@@ -202,6 +256,7 @@ class FunctionDef(BaseModel):
     Legacy-style function definition for structured output.
     Includes basic fields for identifying and parameterizing a function.
     """
+
     model_config = ConfigDict(extra="forbid")
     name: str
     description: Optional[str] = None
@@ -213,6 +268,7 @@ class ToolChoiceFunctionInner(BaseModel):
     Inner structure for choosing a specific tool by name.
     Identifies the exact function the model is forced to call.
     """
+
     model_config = ConfigDict(extra="allow")
     name: str
 
@@ -222,6 +278,7 @@ class ToolChoiceFunction(BaseModel):
     Wrapper for forcing the model to use a specific function.
     Specifies the type as 'function' and points to the inner choice details.
     """
+
     model_config = ConfigDict(extra="allow")
     type: Literal["function"]
     function: ToolChoiceFunctionInner
@@ -235,6 +292,7 @@ class FunctionCallName(BaseModel):
     Structure for identifying a function to be called in legacy mode.
     Used for specifying the name of the function selected by the model.
     """
+
     model_config = ConfigDict(extra="allow")
     name: str
 
@@ -508,7 +566,7 @@ def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
         if not line.startswith("data:"):
             continue
 
-        piece = line[len("data:"):].lstrip()
+        piece = line[len("data:") :].lstrip()
         if piece == "[DONE]":
             yield {"__done__": True}
             return
@@ -516,9 +574,7 @@ def _iter_sse_json_events_sync(resp: Any) -> Iterator[dict[str, Any]]:
         # La mayoría de los proveedores envían un JSON por línea de datos; aun así, admitimos la unión.
         data_lines.append(piece)
         if len(data_lines) == 1:
-            # Tratar de parsear líneas solas inmediatamente (ruta rápida).
-            for evt in flush():
-                yield evt
+            yield from flush()
 
     yield from flush()
 
@@ -559,7 +615,7 @@ async def _iter_sse_json_events_async(resp: Any) -> AsyncIterator[dict[str, Any]
         if not line.startswith("data:"):
             continue
 
-        piece = line[len("data:"):].lstrip()
+        piece = line[len("data:") :].lstrip()
         if piece == "[DONE]":
             yield {"__done__": True}
             return
@@ -615,7 +671,13 @@ def _parse_tool_calls(message: dict[str, Any]) -> tuple[list[dict[str, Any]], li
                     args = loaded
             except Exception as e:
                 invalid.append(
-                    {"name": name, "args": args_s, "id": tc_id, "type": "invalid_tool_call", "error": str(e)}
+                    {
+                        "name": name,
+                        "args": args_s,
+                        "id": tc_id,
+                        "type": "invalid_tool_call",
+                        "error": str(e),
+                    }
                 )
                 continue
 
@@ -746,6 +808,7 @@ class ChatPollinations(BaseChatModel):
         )
 
         auth = AuthConfig.from_env_or_value(self.api_key)
+
         self._http = PollinationsHttpClient(
             config=HttpConfig(base_url=self.base_url, timeout_s=self.timeout_s),
             api_key=auth.api_key,
@@ -784,7 +847,7 @@ class ChatPollinations(BaseChatModel):
         tool_choice: str | None = None,
         parallel_tool_calls: bool | None = None,
         strict: bool | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> Runnable[LanguageModelInput, AIMessage]:
         """
         Bind tools to the chat model for use in generating completions.
@@ -842,7 +905,7 @@ class ChatPollinations(BaseChatModel):
 
             # 2.2) Ruta preferida: convertidor oficial de LangChain maneja BaseTool/StructuredTool/Pydantic/TypedDict
             try:
-                from langchain_core.utils.function_calling import convert_to_openai_tool  # type: ignore
+                from langchain_core.utils.function_calling import convert_to_openai_tool
             except Exception:
                 convert_to_openai_tool = None  # type: ignore
 
@@ -851,7 +914,9 @@ class ChatPollinations(BaseChatModel):
                     converted = convert_to_openai_tool(t)
                     # Puede venir como {"type":"function","function":...} o, según versión, como {"name":...,"parameters":...}
                     if isinstance(converted, dict):
-                        if converted.get("type") == "function" and isinstance(converted.get("function"), dict):
+                        if converted.get("type") == "function" and isinstance(
+                            converted.get("function"), dict
+                        ):
                             out = converted
                         elif "name" in converted and "parameters" in converted:
                             out = {
@@ -878,8 +943,14 @@ class ChatPollinations(BaseChatModel):
 
             # 2.3) Fallback: si es Pydantic model class o tipo TypedDict/typing, intentamos schema via Pydantic
             name = getattr(t, "name", None) or getattr(t, "__name__", None) or "Tool"
-            description = getattr(t, "description", None) or (getattr(t, "__doc__", "") or "").strip() or None
-            parameters: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
+            description = (
+                getattr(t, "description", None) or (getattr(t, "__doc__", "") or "").strip() or None
+            )
+            parameters: dict[str, Any] = {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": True,
+            }
 
             # Pydantic BaseModel subclass
             try:
@@ -907,12 +978,12 @@ class ChatPollinations(BaseChatModel):
         openai_tools: list[dict[str, Any]] = [_convert_one_tool(t) for t in tools]
 
         # 3) Validar tools contra nuestro Union Pydantic ToolDef
-        adapter_tool = TypeAdapter[ToolDef](ToolDef)  # type: ignore[var-annotated]
+        adapter_tool = TypeAdapter[ToolDef](ToolDef)
         tool_defs = [adapter_tool.validate_python(t) for t in openai_tools]
 
         # 4) Validar tool_choice normalizado contra ToolChoice (evita que quede "any" en request_defaults)
         if tool_choice_norm is not None:
-            adapter_choice = TypeAdapter[ToolChoice](ToolChoice)  # type: ignore[var-annotated]
+            adapter_choice = TypeAdapter[ToolChoice](ToolChoice)
             tool_choice_norm = adapter_choice.validate_python(tool_choice_norm)
 
         # 5) Clonar request_defaults y devolver una nueva instancia (estilo LangChain bind)
@@ -932,7 +1003,9 @@ class ChatPollinations(BaseChatModel):
             preserve_multimodal_deltas=self.preserve_multimodal_deltas,
         )
 
-    def _build_payload(self, messages: list[BaseMessage], stop: list[str] | None, **kwargs: Any) -> dict[str, Any]:
+    def _build_payload(
+        self, messages: list[BaseMessage], stop: list[str] | None, **kwargs: Any
+    ) -> dict[str, Any]:
         """
         Assemble the final request payload for the chat completions API.
 
@@ -971,7 +1044,9 @@ class ChatPollinations(BaseChatModel):
                 provider_kwargs[k] = v
 
         if "tool_choice" in provider_kwargs:
-            provider_kwargs["tool_choice"] = _normalize_tool_choice(provider_kwargs.get("tool_choice"))
+            provider_kwargs["tool_choice"] = _normalize_tool_choice(
+                provider_kwargs.get("tool_choice")
+            )
 
         if provider_kwargs:
             validated = ChatPollinationsConfig(**provider_kwargs)
@@ -1017,7 +1092,13 @@ class ChatPollinations(BaseChatModel):
                 additional_kwargs: dict[str, Any] = {}
 
                 # Capturar metadatos extendidos de manera consistente
-                for k in ("tool_calls", "function_call", "audio", "reasoning_content", "content_blocks"):
+                for k in (
+                    "tool_calls",
+                    "function_call",
+                    "audio",
+                    "reasoning_content",
+                    "content_blocks",
+                ):
                     if k in message and message[k] is not None:
                         additional_kwargs[k] = message[k]
 
@@ -1045,7 +1126,9 @@ class ChatPollinations(BaseChatModel):
                 generations.append(ChatGeneration(message=msg, generation_info=gen_info or None))
 
         if not generations:
-            msg = AIMessage(content="", response_metadata=response_metadata, usage_metadata=usage_metadata)
+            msg = AIMessage(
+                content="", response_metadata=response_metadata, usage_metadata=usage_metadata
+            )
             generations = [ChatGeneration(message=msg)]
 
         # Mantener llm_output al mínimo para evitar sobrecargar la propagación de response_metadata.
@@ -1199,7 +1282,13 @@ class ChatPollinations(BaseChatModel):
                     additional_kwargs["content_blocks"] = delta_content
 
                 # Capturar otros metadatos extendidos
-                for k in ("tool_calls", "function_call", "audio", "reasoning_content", "content_blocks"):
+                for k in (
+                    "tool_calls",
+                    "function_call",
+                    "audio",
+                    "reasoning_content",
+                    "content_blocks",
+                ):
                     if k in delta and delta[k] is not None:
                         additional_kwargs[k] = delta[k]
 
@@ -1315,7 +1404,13 @@ class ChatPollinations(BaseChatModel):
                 if self.preserve_multimodal_deltas and isinstance(delta_content, list):
                     additional_kwargs["content_blocks"] = delta_content
 
-                for k in ("tool_calls", "function_call", "audio", "reasoning_content", "content_blocks"):
+                for k in (
+                    "tool_calls",
+                    "function_call",
+                    "audio",
+                    "reasoning_content",
+                    "content_blocks",
+                ):
                     if k in delta and delta[k] is not None:
                         additional_kwargs[k] = delta[k]
 
