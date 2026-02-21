@@ -14,4 +14,4 @@ __all__ = [
     "PollinationsAPIError",
 ]
 
-__version__ = "0.2.5b1"
+__version__ = "0.2.5b2"
