@@ -14,11 +14,12 @@
 [![Build](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/onatrain/langchain-pollinations)
 [![Coverage](https://img.shields.io/badge/coverage-97%25-9C27B0)](https://github.com/onatrain/langchain-pollinations)
 [![Status](https://img.shields.io/badge/status-beta-FFDF76)](https://github.com/onatrain/langchain-pollinations)
-[![Version](https://img.shields.io/badge/version-v0.2.5b1-blue)](https://github.com/onatrain/langchain-pollinations)
+[![PyPI Version](https://img.shields.io/pypi/v/langchain-pollinations?label=PyPI&color=0073B7&logo=pypi)](https://pypi.org/project/langchain-pollinations/)
 [![License](https://img.shields.io/badge/license-MIT-97CA00)](https://opensource.org/license/MIT)
 [![Python Versions](https://img.shields.io/badge/python-3.11+-3776AB?logo=python)](https://github.com/onatrain/langchain-pollinations)
 <br>
 [![LangChain](https://img.shields.io/badge/langchain-1d3d3c?logo=langchain)](https://www.langchain.com/)
+[![Pollinations](https://img.shields.io/badge/Served%20by-POLLINATIONS-8a2be2?style=flat&logoColor=white&labelColor=6a0dad)](https://enter.pollinations.ai)
 [![LangGraph](https://img.shields.io/badge/langgraph-053d5b?logo=langgraph)](https://www.langchain.com/langgraph)
 </div>
 

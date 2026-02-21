@@ -5,6 +5,9 @@
 ```
 langchain-pollinations/
 ├── .env.example
+├── .github/
+│   └── workflows/
+│       └── publish.yml
 ├── .gitignore
 ├── academy/
 │   ├── Chinook.db
@@ -40,12 +43,14 @@ langchain-pollinations/
 │   ├── api_reference.md
 │   ├── code_structure_and_composition.md
 │   ├── design_decissions.md
+│   ├── project_structure.md
 │   └── tooling.md
 ├── examples/
 │   ├── chat_completions/
 │   │   ├── __init__.py
 │   │   ├── audio.mp3
 │   │   ├── audio_generation.py
+│   │   ├── errors.py
 │   │   ├── messages_streaming_chat.py
 │   │   ├── models_list.py
 │   │   ├── multiimage_question.py
