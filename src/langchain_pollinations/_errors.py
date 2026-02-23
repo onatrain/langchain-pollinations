@@ -23,10 +23,14 @@ class PollinationsAPIError(PollinationsError):
 
     Reflects backend JSON errors with format:
     {
-        "status": 400/401/403/500,
+        "status": 400/401/402/403/500,
         "success": false,
         "error": {
-            "code": "BAD_REQUEST" | "UNAUTHORIZED" | "FORBIDDEN" | "INTERNAL_ERROR",
+            "code": "BAD_REQUEST"
+                   | "UNAUTHORIZED"
+                   | "FORBIDDEN"
+                   | "PAYMENT_REQUIRED"
+                   | "INTERNAL_ERROR",
             "message": "...",
             "timestamp": "2026-02-16T...",
             "details": {...},
@@ -36,6 +40,14 @@ class PollinationsAPIError(PollinationsError):
     }
 
     Structured fields are automatically parsed from JSON error envelopes for easy debugging.
+
+    Common HTTP status codes returned by the API:
+
+    - ``400`` – BAD_REQUEST: invalid parameters or schema validation failure.
+    - ``401`` – UNAUTHORIZED: missing or invalid API key.
+    - ``402`` – PAYMENT_REQUIRED: insufficient Pollen balance to complete the request.
+    - ``403`` – FORBIDDEN: valid key but missing required permission scope.
+    - ``500`` – INTERNAL_ERROR: unhandled server-side failure.
     """
 
     status_code: int
@@ -143,3 +155,24 @@ class PollinationsAPIError(PollinationsError):
             True if the status is 400 and the error code is 'BAD_REQUEST'.
         """
         return self.status_code == 400 and self.error_code == "BAD_REQUEST"
+
+    @property
+    def is_payment_required(self) -> bool:
+        """
+        Determine if the error is due to insufficient Pollen balance.
+
+        Returns:
+            True if the request was rejected because of an empty or exhausted
+            Pollen balance.
+
+        Example::
+
+            try:
+                chat.invoke([HumanMessage(content="Hello")])
+            except PollinationsAPIError as exc:
+                if exc.is_payment_required:
+                    print("Pollen balance exhausted — recharge at enter.pollinations.ai")
+        """
+        # Verificar status HTTP 402 (caso normal) o el código estructurado del
+        # envelope (caso defensivo: gateway reenvía código con status atípico).
+        return self.status_code == 402 or self.error_code == "PAYMENT_REQUIRED"

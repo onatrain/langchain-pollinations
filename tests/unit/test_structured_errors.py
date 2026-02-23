@@ -4,7 +4,7 @@ Tests unitarios para manejo estructurado de errores del API.
 
 import json
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
 from langchain_pollinations._errors import PollinationsAPIError
 from langchain_pollinations._client import _parse_error_response, PollinationsHttpClient, HttpConfig
 
@@ -760,3 +760,320 @@ def test_error_to_dict_for_logging(client):
     assert error_dict["error_code"] == "FORBIDDEN"
     assert error_dict["request_id"] == "req_logging"
     assert error_dict["details"]["required"] == "admin"
+
+
+def _make_mock_response(
+    status_code: int,
+    body: str = "",
+    content_type: str = "application/json",
+) -> MagicMock:
+    """Build a minimal httpx.Response mock for raise_for_status tests.
+
+    Assigns ``headers`` as a real dict so that ``.get()`` works natively
+    without additional MagicMock configuration.
+    """
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    mock_resp.text = body
+    # Dict real para que resp.headers.get("content-type", "") funcione sin configuración extra
+    mock_resp.headers = {"content-type": content_type}
+    return mock_resp
+
+
+# Cuerpo JSON canónico que el backend envía en un error 402 con envelope completo
+_402_JSON_BODY = json.dumps({
+    "status": 402,
+    "success": False,
+    "error": {
+        "code": "PAYMENT_REQUIRED",
+        "message": "Insufficient Pollen balance to complete the request.",
+        "timestamp": "2026-02-22T22:00:00Z",
+        "requestId": "req_test_abc123",
+        "cause": "balance_exhausted",
+    },
+})
+
+
+def test_is_payment_required_true_via_status_402():
+    """is_payment_required is True when status_code is 402, regardless of error_code."""
+    err = PollinationsAPIError(status_code=402, message="Payment required", error_code=None)
+
+    assert err.is_payment_required is True
+
+
+def test_is_payment_required_true_via_error_code_only():
+    """is_payment_required is True via error_code alone (defensive OR branch).
+
+    Covers the edge case where the gateway forwards PAYMENT_REQUIRED in the
+    JSON envelope but uses a non-standard HTTP status code.
+    """
+    # status atípico: sólo el error_code activa la condición
+    err = PollinationsAPIError(
+        status_code=500,
+        message="Payment required",
+        error_code="PAYMENT_REQUIRED",
+    )
+
+    assert err.is_payment_required is True
+
+
+def test_is_payment_required_true_via_both_conditions():
+    """is_payment_required is True when both status_code=402 and error_code match."""
+    err = PollinationsAPIError(
+        status_code=402,
+        message="Insufficient Pollen balance.",
+        error_code="PAYMENT_REQUIRED",
+    )
+
+    assert err.is_payment_required is True
+
+
+def test_is_payment_required_false_on_400():
+    """is_payment_required is False for a 400 BAD_REQUEST error."""
+    err = PollinationsAPIError(
+        status_code=400, message="Bad request", error_code="BAD_REQUEST"
+    )
+
+    assert err.is_payment_required is False
+
+
+def test_is_payment_required_false_on_401():
+    """is_payment_required is False for a 401 UNAUTHORIZED error."""
+    err = PollinationsAPIError(
+        status_code=401, message="Unauthorized", error_code="UNAUTHORIZED"
+    )
+
+    assert err.is_payment_required is False
+
+
+def test_is_payment_required_false_on_403():
+    """is_payment_required is False for a 403 FORBIDDEN error."""
+    err = PollinationsAPIError(
+        status_code=403, message="Forbidden", error_code="FORBIDDEN"
+    )
+
+    assert err.is_payment_required is False
+
+
+def test_is_payment_required_false_on_500():
+    """is_payment_required is False for a 500 INTERNAL_ERROR."""
+    err = PollinationsAPIError(
+        status_code=500, message="Internal server error", error_code="INTERNAL_ERROR"
+    )
+
+    assert err.is_payment_required is False
+
+
+def test_is_payment_required_false_when_neither_condition_matches():
+    """is_payment_required is False when neither branch of the OR is satisfied."""
+    # Ninguna condición activa: status != 402 y error_code es None
+    err = PollinationsAPIError(status_code=403, message="Forbidden", error_code=None)
+
+    assert err.is_payment_required is False
+
+
+def test_parse_error_response_402_full_json_envelope():
+    """_parse_error_response correctly extracts all fields from a canonical 402 envelope."""
+    result = _parse_error_response(
+        status_code=402,
+        body_text=_402_JSON_BODY,
+        content_type="application/json",
+    )
+
+    assert isinstance(result, PollinationsAPIError)
+    assert result.status_code == 402
+    assert result.error_code == "PAYMENT_REQUIRED"
+    assert result.message == "Insufficient Pollen balance to complete the request."
+    assert result.request_id == "req_test_abc123"
+    assert result.timestamp == "2026-02-22T22:00:00Z"
+    assert result.cause == "balance_exhausted"
+    # Verificación end-to-end: el objeto parseado activa is_payment_required
+    assert result.is_payment_required is True
+
+
+def test_parse_error_response_402_empty_body():
+    """_parse_error_response handles a 402 with an empty body gracefully.
+
+    When body is empty, error_code remains None; is_payment_required stays
+    True via the status_code branch of the OR.
+    """
+    result = _parse_error_response(
+        status_code=402,
+        body_text="",
+        content_type="application/json",
+    )
+
+    assert isinstance(result, PollinationsAPIError)
+    assert result.status_code == 402
+    assert result.error_code is None
+    # is_payment_required sigue True porque status_code == 402
+    assert result.is_payment_required is True
+
+
+def test_parse_error_response_402_plain_text_content_type():
+    """_parse_error_response handles a 402 with text/plain (no JSON parsing attempted)."""
+    result = _parse_error_response(
+        status_code=402,
+        body_text="Insufficient balance",
+        content_type="text/plain",
+    )
+
+    assert isinstance(result, PollinationsAPIError)
+    assert result.status_code == 402
+    # Sin JSON, el body raw se usa como mensaje
+    assert result.message == "Insufficient balance"
+    assert result.error_code is None
+    assert result.is_payment_required is True
+
+
+def test_parse_error_response_402_invalid_json():
+    """_parse_error_response handles a 402 with malformed JSON without raising."""
+    result = _parse_error_response(
+        status_code=402,
+        body_text="{not: valid, json,,",
+        content_type="application/json",
+    )
+
+    assert isinstance(result, PollinationsAPIError)
+    assert result.status_code == 402
+    # JSON inválido → error_code no se puede parsear
+    assert result.error_code is None
+    # is_payment_required sigue True gracias al status_code
+    assert result.is_payment_required is True
+
+
+def test_parse_error_response_402_json_without_error_object():
+    """_parse_error_response handles a 402 where the envelope lacks the 'error' key.
+
+    Falls back to reading 'message' directly from the top-level JSON object.
+    """
+    body = json.dumps({
+        "status": 402,
+        "success": False,
+        "message": "Pollen balance exhausted",
+    })
+    result = _parse_error_response(
+        status_code=402,
+        body_text=body,
+        content_type="application/json",
+    )
+
+    assert isinstance(result, PollinationsAPIError)
+    assert result.status_code == 402
+    # Mensaje extraído del fallback data.get("message")
+    assert result.message == "Pollen balance exhausted"
+    # Sin objeto "error", error_code queda None
+    assert result.error_code is None
+    assert result.is_payment_required is True
+
+
+def test_raise_for_status_402_raises_pollinations_api_error():
+    """raise_for_status raises PollinationsAPIError (not a generic exception) on 402."""
+    mock_resp = _make_mock_response(402, body=_402_JSON_BODY)
+
+    with pytest.raises(PollinationsAPIError) as exc_info:
+        PollinationsHttpClient.raise_for_status(mock_resp)
+
+    assert exc_info.value.status_code == 402
+
+
+def test_raise_for_status_402_error_is_payment_required():
+    """raise_for_status: the raised PollinationsAPIError has is_payment_required=True."""
+    mock_resp = _make_mock_response(402, body=_402_JSON_BODY)
+
+    with pytest.raises(PollinationsAPIError) as exc_info:
+        PollinationsHttpClient.raise_for_status(mock_resp)
+
+    assert exc_info.value.is_payment_required is True
+
+
+def test_raise_for_status_402_preserves_message():
+    """raise_for_status: the raised exception carries the backend message from the envelope."""
+    mock_resp = _make_mock_response(402, body=_402_JSON_BODY)
+
+    with pytest.raises(PollinationsAPIError) as exc_info:
+        PollinationsHttpClient.raise_for_status(mock_resp)
+
+    assert "Insufficient Pollen balance" in exc_info.value.message
+
+
+def test_raise_for_status_402_preserves_request_id():
+    """raise_for_status: the raised exception carries the requestId from the envelope."""
+    mock_resp = _make_mock_response(402, body=_402_JSON_BODY)
+
+    with pytest.raises(PollinationsAPIError) as exc_info:
+        PollinationsHttpClient.raise_for_status(mock_resp)
+
+    assert exc_info.value.request_id == "req_test_abc123"
+
+
+def test_raise_for_status_402_empty_body_still_raises():
+    """raise_for_status raises on 402 even when the response body is empty."""
+    mock_resp = _make_mock_response(402, body="")
+
+    with pytest.raises(PollinationsAPIError) as exc_info:
+        PollinationsHttpClient.raise_for_status(mock_resp)
+
+    assert exc_info.value.status_code == 402
+    assert exc_info.value.is_payment_required is True
+
+
+def test_raise_for_status_200_does_not_raise():
+    """raise_for_status does not raise for a successful 200 response (sanity check)."""
+    mock_resp = _make_mock_response(200, body='{"id": "chatcmpl-123"}')
+
+    # No debe lanzar ninguna excepción
+    PollinationsHttpClient.raise_for_status(mock_resp)
+
+
+def test_402_is_also_client_error():
+    """A 402 is a 4xx status, so is_client_error must remain True."""
+    err = PollinationsAPIError(status_code=402, message="Payment required")
+
+    assert err.is_client_error is True
+
+
+def test_402_is_not_auth_error():
+    """A 402 must not be misclassified as an authentication/authorization error."""
+    err = PollinationsAPIError(status_code=402, message="Payment required")
+
+    assert err.is_auth_error is False
+
+
+def test_402_is_not_validation_error():
+    """A 402 must not be misclassified as a validation error, even with PAYMENT_REQUIRED code."""
+    err = PollinationsAPIError(
+        status_code=402, message="Payment required", error_code="PAYMENT_REQUIRED"
+    )
+
+    assert err.is_validation_error is False
+
+
+def test_402_is_not_server_error():
+    """A 402 must not be misclassified as a server-side error."""
+    err = PollinationsAPIError(status_code=402, message="Payment required")
+
+    assert err.is_server_error is False
+
+
+def test_existing_error_properties_unaffected_by_402_addition():
+    """Regression guard: all pre-existing error properties remain correct for non-402 codes."""
+    # 400 BAD_REQUEST
+    bad_req = PollinationsAPIError(status_code=400, message="Bad request", error_code="BAD_REQUEST")
+    assert bad_req.is_validation_error is True
+    assert bad_req.is_payment_required is False
+
+    # 401 UNAUTHORIZED
+    unauth = PollinationsAPIError(status_code=401, message="Unauthorized", error_code="UNAUTHORIZED")
+    assert unauth.is_auth_error is True
+    assert unauth.is_payment_required is False
+
+    # 403 FORBIDDEN
+    forbidden = PollinationsAPIError(status_code=403, message="Forbidden", error_code="FORBIDDEN")
+    assert forbidden.is_auth_error is True
+    assert forbidden.is_payment_required is False
+
+    # 500 INTERNAL_ERROR
+    server_err = PollinationsAPIError(status_code=500, message="Server error", error_code="INTERNAL_ERROR")
+    assert server_err.is_server_error is True
+    assert server_err.is_payment_required is False
