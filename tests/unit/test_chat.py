@@ -1,5 +1,7 @@
 from pathlib import Path
 from typing import Any
+import threading
+import warnings
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +9,7 @@ import pytest
 from pydantic import ValidationError, BaseModel, Field
 from langchain_core.messages import HumanMessage, AIMessage
 
+import langchain_pollinations.chat as chat_module
 from langchain_pollinations.chat import (
     AudioConfig,
     StreamOptions,
@@ -36,6 +39,8 @@ from langchain_pollinations.chat import (
     _iter_sse_json_events_sync,
     _iter_sse_json_events_async,
     DEFAULT_BASE_URL,
+    _FALLBACK_TEXT_MODEL_IDS,
+    _load_text_model_ids,
 )
 
 
@@ -2447,3 +2452,316 @@ def test_chat_pollinations_parse_chat_result_with_mixed_tool_calls():
     assert gen.message.invalid_tool_calls[0]["name"] == "invalid_tool"
     assert isinstance(gen.message.invalid_tool_calls[0]["args"], str)
     assert gen.message.invalid_tool_calls[0]["args"] == "{broken: json"
+
+
+# Fixture: aislamiento total del estado de catálogo entre tests
+@pytest.fixture(autouse=True)
+def _reset_catalog_state():
+    """
+    Save and restore module-level catalog globals around each test.
+
+    Ensures that mutations made by one test (cache content, loaded flag)
+    do not affect subsequent tests, regardless of execution order.
+    """
+    # Guardar estado actual para restaurarlo después del test
+    _saved_cache = chat_module._text_model_ids_cache
+    _saved_loaded = chat_module._text_model_ids_loaded
+
+    # Resetear al estado de arranque equivalente al import inicial del módulo
+    chat_module._text_model_ids_cache = list(_FALLBACK_TEXT_MODEL_IDS)
+    chat_module._text_model_ids_loaded = False
+
+    yield
+
+    # Restaurar para no contaminar el estado global del intérprete
+    chat_module._text_model_ids_cache = _saved_cache
+    chat_module._text_model_ids_loaded = _saved_loaded
+
+
+def _make_info_mock(text_models: list[str]) -> MagicMock:
+    """
+    Build a ModelInformation mock that returns ``text_models`` for the text catalog.
+
+    Args:
+        text_models: List of model ID strings the mock should report.
+
+    Returns:
+        A configured MagicMock instance.
+    """
+    mock = MagicMock()
+    mock.get_available_models.return_value = {"text": text_models}
+    return mock
+
+
+def test_load_text_model_ids_happy_path():
+    """When the API returns a non-empty list the cache is replaced and the list is returned."""
+    api_models = ["model-alpha", "model-beta", "model-gamma"]
+
+    with patch("langchain_pollinations.models.ModelInformation", return_value=_make_info_mock(api_models)):
+        result = _load_text_model_ids(api_key="sk_test")
+
+    assert result == api_models
+    assert chat_module._text_model_ids_cache == api_models
+    assert chat_module._text_model_ids_loaded is True
+
+
+def test_load_text_model_ids_api_key_forwarded():
+    """The api_key argument is forwarded verbatim to ModelInformation."""
+    with patch("langchain_pollinations.models.ModelInformation", return_value=_make_info_mock(["m"])) as MockClass:
+        _load_text_model_ids(api_key="sk_forwarded_key")
+
+    MockClass.assert_called_once_with(api_key="sk_forwarded_key")
+
+
+def test_load_text_model_ids_none_api_key_forwarded():
+    """Passing api_key=None is valid and is forwarded to ModelInformation as-is."""
+    with patch("langchain_pollinations.models.ModelInformation", return_value=_make_info_mock(["m"])) as MockClass:
+        _load_text_model_ids(api_key=None)
+
+    MockClass.assert_called_once_with(api_key=None)
+
+
+def test_load_text_model_ids_empty_response_keeps_fallback():
+    """When the API returns an empty list the fallback cache is preserved unchanged."""
+    with patch("langchain_pollinations.models.ModelInformation", return_value=_make_info_mock([])):
+        result = _load_text_model_ids(api_key="sk_test")
+
+    assert result == list(_FALLBACK_TEXT_MODEL_IDS)
+    assert chat_module._text_model_ids_cache == list(_FALLBACK_TEXT_MODEL_IDS)
+
+
+def test_load_text_model_ids_missing_text_key_keeps_fallback():
+    """When the API response lacks the 'text' key the fallback cache is preserved."""
+    mock_info = MagicMock()
+    # La respuesta no contiene la clave "text" — solo "image"
+    mock_info.get_available_models.return_value = {"image": ["flux", "kontext"]}
+
+    with patch("langchain_pollinations.models.ModelInformation", return_value=mock_info):
+        result = _load_text_model_ids(api_key="sk_test")
+
+    assert result == list(_FALLBACK_TEXT_MODEL_IDS)
+    assert chat_module._text_model_ids_cache == list(_FALLBACK_TEXT_MODEL_IDS)
+
+
+def test_load_text_model_ids_exception_keeps_fallback_and_marks_loaded():
+    """
+    When ModelInformation raises any exception the fallback is preserved and
+    the loaded flag is set to True to prevent repeated failing attempts.
+    """
+    with patch(
+        "langchain_pollinations.models.ModelInformation",
+        side_effect=RuntimeError("simulated network failure"),
+    ):
+        result = _load_text_model_ids(api_key="sk_test")
+
+    assert result == list(_FALLBACK_TEXT_MODEL_IDS)
+    # El flag debe marcarse True incluso ante fallo: evita martillar el API
+    # en cada instantiación en entornos sin conectividad.
+    assert chat_module._text_model_ids_loaded is True
+
+
+def test_load_text_model_ids_one_shot_guard():
+    """The API is called exactly once across multiple successive invocations."""
+    with patch(
+        "langchain_pollinations.models.ModelInformation",
+        return_value=_make_info_mock(["model-once"]),
+    ) as MockClass:
+        _load_text_model_ids(api_key="sk_test")
+        _load_text_model_ids(api_key="sk_test")
+        _load_text_model_ids(api_key="sk_test")
+
+    # Tres llamadas, solo una instanciación de ModelInformation
+    assert MockClass.call_count == 1
+
+
+def test_load_text_model_ids_force_true_bypasses_guard():
+    """With force=True the API is called again even when the one-shot guard is active."""
+    first_batch = ["model-first"]
+    second_batch = ["model-second", "model-third"]
+
+    mock_info = MagicMock()
+    # La API devuelve listas distintas en llamadas sucesivas
+    mock_info.get_available_models.side_effect = [
+        {"text": first_batch},
+        {"text": second_batch},
+    ]
+
+    with patch("langchain_pollinations.models.ModelInformation", return_value=mock_info) as MockClass:
+        result_first = _load_text_model_ids(api_key="sk_test")
+        result_second = _load_text_model_ids(api_key="sk_test", force=True)
+
+    assert result_first == first_batch
+    assert result_second == second_batch
+    assert chat_module._text_model_ids_cache == second_batch
+    assert MockClass.call_count == 2
+
+
+def test_load_text_model_ids_returns_copy():
+    """The returned list is a defensive copy; mutating it does not corrupt the cache."""
+    with patch(
+        "langchain_pollinations.models.ModelInformation",
+        return_value=_make_info_mock(["model-safe"]),
+    ):
+        result = _load_text_model_ids(api_key="sk_test")
+
+    # Mutar el resultado no debe afectar el estado interno del módulo
+    result.append("intruder-value")
+
+    assert "intruder-value" not in chat_module._text_model_ids_cache
+
+
+# ---------------------------------------------------------------------------
+# Tests: ChatPollinationsConfig._validate_model_id
+# ---------------------------------------------------------------------------
+
+def test_validate_model_id_known_model_no_warning():
+    """No UserWarning is emitted when the model ID is present in the catalog."""
+    chat_module._text_model_ids_cache = ["openai", "gemini", "claude"]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cfg = ChatPollinationsConfig(model="openai")
+
+    user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert len(user_warnings) == 0
+    assert cfg.model == "openai"
+
+
+def test_validate_model_id_unknown_model_emits_warning():
+    """A UserWarning is emitted when the model ID is absent from the catalog."""
+    chat_module._text_model_ids_cache = ["openai", "gemini"]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ChatPollinationsConfig(model="nonexistent-model-xyz")
+
+    user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert len(user_warnings) == 1
+    # El aviso debe mencionar el nombre del modelo infractor
+    assert "nonexistent-model-xyz" in str(user_warnings[0].message)
+
+
+def test_validate_model_id_none_no_warning():
+    """No UserWarning is emitted when model is None (field left unset)."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ChatPollinationsConfig(model=None)
+
+    user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert len(user_warnings) == 0
+
+
+def test_validate_model_id_preserves_value_after_warning():
+    """The field validator returns the original value unchanged even after emitting a warning."""
+    chat_module._text_model_ids_cache = ["openai"]
+
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        cfg = ChatPollinationsConfig(model="mystery-model-999")
+
+    # El request debe poder construirse con el valor tal como lo dio el usuario
+    assert cfg.model == "mystery-model-999"
+
+
+def test_validate_model_id_warning_mentions_force_refresh():
+    """The warning message includes guidance to call _load_text_model_ids(force=True)."""
+    chat_module._text_model_ids_cache = ["openai"]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ChatPollinationsConfig(model="future-model-not-in-catalog")
+
+    user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert len(user_warnings) == 1
+    assert "force=True" in str(user_warnings[0].message)
+
+
+# ---------------------------------------------------------------------------
+# Tests: ChatPollinations.__init__ — integración con el catálogo
+# ---------------------------------------------------------------------------
+
+def test_chat_pollinations_init_triggers_catalog_load(monkeypatch):
+    """ChatPollinations.__init__ calls _load_text_model_ids before field validation."""
+    calls: list[dict] = []
+
+    def _mock_load(api_key=None, *, force=False):
+        # Registrar la llamada sin hacer ninguna llamada de red
+        calls.append({"api_key": api_key, "force": force})
+        return list(_FALLBACK_TEXT_MODEL_IDS)
+
+    monkeypatch.setattr(chat_module, "_load_text_model_ids", _mock_load)
+
+    with (
+        patch("langchain_pollinations.chat.AuthConfig.from_env_or_value") as mock_auth,
+        patch("langchain_pollinations.chat.PollinationsHttpClient"),
+    ):
+        mock_auth.return_value = MagicMock(api_key="sk_test")
+        ChatPollinations(api_key="sk_test")
+
+    # La carga debe haberse disparado exactamente una vez durante el __init__
+    assert len(calls) == 1
+
+
+def test_chat_pollinations_init_passes_api_key_to_loader(monkeypatch):
+    """ChatPollinations.__init__ forwards the api_key argument to _load_text_model_ids."""
+    received: list[str | None] = []
+
+    def _mock_load(api_key=None, *, force=False):
+        received.append(api_key)
+        return list(_FALLBACK_TEXT_MODEL_IDS)
+
+    monkeypatch.setattr(chat_module, "_load_text_model_ids", _mock_load)
+
+    with (
+        patch("langchain_pollinations.chat.AuthConfig.from_env_or_value") as mock_auth,
+        patch("langchain_pollinations.chat.PollinationsHttpClient"),
+    ):
+        mock_auth.return_value = MagicMock(api_key="sk_my_secret")
+        ChatPollinations(api_key="sk_my_secret")
+
+    assert received == ["sk_my_secret"]
+
+
+# ---------------------------------------------------------------------------
+# Test: thread safety (double-checked locking)
+# ---------------------------------------------------------------------------
+
+def test_load_text_model_ids_thread_safety():
+    """
+    Under concurrent load the API is called exactly once regardless of how many
+    threads trigger _load_text_model_ids simultaneously (double-checked locking).
+    """
+    NUM_THREADS = 12
+    # La barrera sincroniza el arranque de todos los hilos al mismo instante,
+    # maximizando la probabilidad de colisión en la sección crítica del lock.
+    barrier = threading.Barrier(parties=NUM_THREADS)
+    results: list[list[str]] = []
+    errors: list[Exception] = []
+
+    def _worker() -> None:
+        try:
+            barrier.wait(timeout=5)  # sincronizar arranque simultáneo
+            r = _load_text_model_ids(api_key="sk_concurrent")
+            results.append(r)
+        except Exception as exc:
+            errors.append(exc)
+
+    mock_info = _make_info_mock(["model-concurrent-safe"])
+
+    with patch("langchain_pollinations.models.ModelInformation", return_value=mock_info):
+        threads = [threading.Thread(target=_worker) for _ in range(NUM_THREADS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+    assert not errors, f"Errors in threads: {errors}"
+    assert len(results) == NUM_THREADS
+    # La API solo debe haber sido invocada una vez a pesar de los 12 hilos concurrentes
+    assert mock_info.get_available_models.call_count == 1
+    # Todos los hilos deben haber recibido el mismo resultado coherente
+    assert all(r == ["model-concurrent-safe"] for r in results)
+
+
+
+

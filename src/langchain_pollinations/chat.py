@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import threading
+import warnings
 from typing import (
     Annotated,
     Any,
@@ -30,7 +32,7 @@ from langchain_core.messages.tool import ToolCallChunk, tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator
 
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
@@ -41,7 +43,10 @@ DEFAULT_BASE_URL = "https://gen.pollinations.ai"
 INT53_MAX = 9007199254740991
 
 
-TextModelId = Literal[
+# Alias para mantener compatibilidad de anotaciones mientras el catálogo se gestiona dinámicamente.
+TextModelId = str
+
+_FALLBACK_TEXT_MODEL_IDS: list[str] = [
     "openai",
     "openai-fast",
     "openai-large",
@@ -67,9 +72,80 @@ TextModelId = Literal[
     "nova-fast",
     "glm",
     "minimax",
-    "nomnom",
-    "qwen-character",
+    "qwen-safety",
 ]
+
+# Caché mutable del catálogo. Se inicializa con el fallback y se actualiza
+# en la primera llamada exitosa a _load_text_model_ids().
+_text_model_ids_cache: list[str] = list(_FALLBACK_TEXT_MODEL_IDS)
+
+# Primitivas de sincronización para garantizar que la carga remota se ejecute
+# a lo sumo una vez por proceso.
+_text_model_ids_lock: threading.Lock = threading.Lock()
+_text_model_ids_loaded: bool = False
+
+def _load_text_model_ids(
+    api_key: str | None = None,
+    *,
+    force: bool = False,
+) -> list[str]:
+    """
+    Fetch the list of available text model IDs from the Pollinations API and
+    update the module-level cache.
+
+    The remote call is made at most once per process lifetime. Subsequent calls
+    return the cached list immediately unless ``force=True`` is passed. If the
+    API call fails for any reason (network error, missing key, etc.), the cache
+    retains its current value without raising an exception.
+
+    Args:
+        api_key: API key forwarded to ``ModelInformation``. When ``None`` the
+            value is resolved from the ``POLLINATIONS_API_KEY`` environment
+            variable. If neither is available the call fails silently and the
+            fallback list is kept.
+        force: When ``True``, bypass the one-shot guard and re-fetch from the
+            API regardless of whether a previous successful call was already
+            made. Useful for explicit catalog refreshes at runtime.
+
+    Returns:
+        A copy of the current (possibly freshly updated) text model ID list.
+    """
+    global _text_model_ids_cache, _text_model_ids_loaded
+
+    # Lectura rápida fuera del lock: evita la contención en el caso común
+    # (catálogo ya cargado, force=False).
+    if _text_model_ids_loaded and not force:
+        return list(_text_model_ids_cache)
+
+    with _text_model_ids_lock:
+        # Segunda verificación dentro del lock (double-checked locking) para
+        # descartar la carrera entre hilos que pasaron el primer if.
+        if _text_model_ids_loaded and not force:
+            return list(_text_model_ids_cache)
+
+        try:
+            # Import local para evitar importaciones circulares al nivel de módulo
+            from langchain_pollinations.models import ModelInformation  # noqa: PLC0415
+
+            info = ModelInformation(api_key=api_key)
+            ids: list[str] = info.get_available_models().get("text", [])
+
+            if ids:
+                # Reemplazar el caché solo si la respuesta tiene contenido útil.
+                _text_model_ids_cache = ids
+
+        except Exception:
+            # Cualquier fallo (red, clave inválida, respuesta vacía, etc.) deja
+            # el caché intacto. _text_model_ids_loaded se marca True igualmente
+            # para no reintentar en cada instantiación (usar force=True para eso).
+            pass
+
+        # Marcar como intentado siempre: evita martillar el API en cada instanciación
+        # de ChatPollinations cuando el entorno no tiene conectividad.
+        _text_model_ids_loaded = True
+
+    return list(_text_model_ids_cache)
+
 
 Modality = Literal["text", "audio"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
@@ -715,7 +791,7 @@ class ChatPollinationsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model: Optional[TextModelId] = None
+    model: Optional[str] = None
     modalities: Optional[list[Modality]] = None
     audio: Optional[AudioConfig] = None
     temperature: Optional[FloatTemperature] = None
@@ -741,6 +817,40 @@ class ChatPollinationsConfig(BaseModel):
     thinking: Optional[ThinkingConfig] = None
     reasoning_effort: Optional[ReasoningEffort] = None
     thinking_budget: Optional[Int0ToInt53] = None
+
+    @field_validator("model", mode="after")
+    @classmethod
+    def _validate_model_id(cls, v: str | None) -> str | None:
+        """
+        Emit a ``UserWarning`` when the provided model ID is absent from the
+        known catalog, without blocking the request.
+
+        Validation is intentionally non-strict so that models newly added to
+        the API continue to work even before the local catalog is refreshed.
+        The fallback list covers all models available at release time; new IDs
+        only trigger a warning until the catalog is updated via
+        `_load_text_model_ids`.
+
+        Args:
+            v: The model ID string to validate, or ``None`` when unset.
+
+        Returns:
+            The original value unchanged.
+        """
+        # Advertir solo cuando el caché tiene datos y el ID no aparece en él.
+        # _text_model_ids_cache nunca está vacío (se inicializa con el fallback),
+        # por lo que la condición `_text_model_ids_cache` siempre es verdadera;
+        # se conserva por claridad semántica.
+        if v is not None and _text_model_ids_cache and v not in _text_model_ids_cache:
+            warnings.warn(
+                f"Model ID '{v}' is not in the known text model catalog "
+                f"({len(_text_model_ids_cache)} models loaded). "
+                "The request will proceed, but the API may return an error if the ID is invalid. "
+                "Call _load_text_model_ids(force=True) to refresh the catalog from the API.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return v
 
 
 class ChatPollinations(BaseChatModel):
@@ -788,6 +898,11 @@ class ChatPollinations(BaseChatModel):
             preserve_multimodal_deltas: Whether to keep multimodal data in streaming chunks.
             **kwargs: Additional parameters passed to the base chat model.
         """
+        # Actualizar el catálogo de modelos ANTES de construir ChatPollinationsConfig.
+        # Así el _validate_model_id de ese modelo trabaja con la lista más reciente
+        # disponible. La llamada es inoperante si el catálogo ya fue cargado en este proceso.
+        _load_text_model_ids(api_key)
+
         rd_keys = set(ChatPollinationsConfig.model_fields.keys())
         rd_kwargs = {k: v for k, v in kwargs.items() if k in rd_keys}
         lc_kwargs = {k: v for k, v in kwargs.items() if k not in rd_keys}
@@ -957,7 +1072,7 @@ class ChatPollinations(BaseChatModel):
                 if isinstance(t, type) and issubclass(t, BaseModel):
                     parameters = t.model_json_schema()
                 else:
-                    # TypedDict / typing schema va TypeAdapter (Pydantic v2)
+                    # TypedDict / typing schema vs TypeAdapter (Pydantic v2)
                     with contextlib.suppress(Exception):
                         parameters = TypeAdapter(t).json_schema()
             except Exception:
