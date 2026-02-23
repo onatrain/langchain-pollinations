@@ -1,14 +1,20 @@
 from pathlib import Path
 from typing import Any
+import threading
+import warnings as _warnings_module
+from unittest.mock import MagicMock, patch
 from dataclasses import dataclass
 
 import pytest
 from pydantic import ValidationError
 
+import langchain_pollinations.image as image_module
 from langchain_pollinations.image import (
     ImagePromptParams,
     ImagePollinations,
     DEFAULT_BASE_URL,
+    _FALLBACK_IMAGE_MODEL_IDS,
+    _load_image_model_ids,
 )
 
 
@@ -488,3 +494,278 @@ async def test_image_pollinations_agenerate_merges_instance_and_call_params():
     assert params["model"] == "seedance-pro"
     assert params["enhance"] is False  # sobrescrito
     assert params["safe"] is True      # nuevo
+
+
+@pytest.fixture()
+def reset_image_catalog(monkeypatch):
+    """
+    Restore module-level catalog state to its initial (fallback) values before
+    each test that exercises ``_load_image_model_ids`` directly.
+
+    Resets all three module globals that participate in the one-shot loading
+    mechanism, including a fresh lock to avoid any contamination from a lock
+    object that may have been acquired in a previous test.
+    """
+    # Restaurar caché al fallback para evitar contaminación entre tests.
+    monkeypatch.setattr(image_module, "_image_model_ids_cache", list(_FALLBACK_IMAGE_MODEL_IDS))
+    # Marcar como NO cargado para que cada test empiece desde cero.
+    monkeypatch.setattr(image_module, "_image_model_ids_loaded", False)
+    # Lock fresco: evita que un lock adquirido en un test anterior bloquee al siguiente.
+    monkeypatch.setattr(image_module, "_image_model_ids_lock", threading.Lock())
+
+
+def test_fallback_catalog_is_not_empty():
+    """
+    Verify that the hardcoded fallback catalog contains at least one model ID.
+    An empty fallback would make the cache meaningless before the first API call.
+    """
+    assert len(_FALLBACK_IMAGE_MODEL_IDS) > 0
+
+
+def test_fallback_catalog_contains_flux():
+    """
+    Verify that 'flux' is present in the fallback catalog.
+    """
+    assert "flux" in _FALLBACK_IMAGE_MODEL_IDS
+
+
+def test_load_image_model_ids_updates_cache_on_success(reset_image_catalog):
+    """
+    Cache is replaced with the API response when the call succeeds and the
+    response contains at least one model ID.
+    """
+    api_models = ["flux", "turbo", "gptimage"]
+    mock_info = MagicMock()
+    mock_info.get_available_models.return_value = {"image": api_models}
+
+    with patch("langchain_pollinations.models.ModelInformation", return_value=mock_info):
+        result = _load_image_model_ids(api_key="test_key")
+
+    assert result == api_models
+    assert image_module._image_model_ids_cache == api_models
+
+
+def test_load_image_model_ids_retains_fallback_on_api_failure(reset_image_catalog):
+    """
+    Cache is not modified when the API call raises an exception; the fallback
+    list is preserved so the library remains functional without connectivity.
+    """
+    with patch(
+        "langchain_pollinations.models.ModelInformation",
+        side_effect=RuntimeError("network error"),
+    ):
+        result = _load_image_model_ids(api_key="test_key")
+
+    assert result == list(_FALLBACK_IMAGE_MODEL_IDS)
+    assert image_module._image_model_ids_cache == list(_FALLBACK_IMAGE_MODEL_IDS)
+
+
+def test_load_image_model_ids_skips_empty_api_response(reset_image_catalog):
+    """
+    Cache is not replaced when the API returns an empty list.
+    An empty response is treated as a non-authoritative answer.
+    """
+    mock_info = MagicMock()
+    mock_info.get_available_models.return_value = {"image": []}
+
+    with patch("langchain_pollinations.models.ModelInformation", return_value=mock_info):
+        result = _load_image_model_ids(api_key="test_key")
+
+    assert result == list(_FALLBACK_IMAGE_MODEL_IDS)
+    assert image_module._image_model_ids_cache == list(_FALLBACK_IMAGE_MODEL_IDS)
+
+
+def test_load_image_model_ids_marks_loaded_on_success(reset_image_catalog):
+    """
+    ``_image_model_ids_loaded`` is set to ``True`` after a successful API call,
+    activating the one-shot guard for subsequent invocations.
+    """
+    mock_info = MagicMock()
+    mock_info.get_available_models.return_value = {"image": ["flux"]}
+
+    with patch("langchain_pollinations.models.ModelInformation", return_value=mock_info):
+        _load_image_model_ids(api_key="test_key")
+
+    assert image_module._image_model_ids_loaded is True
+
+
+def test_load_image_model_ids_marks_loaded_on_failure(reset_image_catalog):
+    """
+    ``_image_model_ids_loaded`` is set to ``True`` even when the API call fails.
+
+    This prevents the library from retrying on every instantiation in environments
+    without connectivity. A forced refresh via ``force=True`` is the explicit path.
+    """
+    with patch(
+        "langchain_pollinations.models.ModelInformation",
+        side_effect=ConnectionError("no network"),
+    ):
+        _load_image_model_ids(api_key="test_key")
+
+    assert image_module._image_model_ids_loaded is True
+
+
+def test_load_image_model_ids_one_shot_guard(reset_image_catalog):
+    """
+    The API is called exactly once; subsequent calls reuse the cache without
+    constructing a new ``ModelInformation`` instance.
+    """
+    mock_info = MagicMock()
+    mock_info.get_available_models.return_value = {"image": ["flux", "turbo"]}
+
+    with patch(
+        "langchain_pollinations.models.ModelInformation", return_value=mock_info
+    ) as mock_cls:
+        _load_image_model_ids(api_key="test_key")
+        _load_image_model_ids(api_key="test_key")
+        _load_image_model_ids(api_key="test_key")
+
+    # Solo una construcción de ModelInformation, independientemente de cuántas
+    # veces se llame a _load_image_model_ids sin force=True.
+    assert mock_cls.call_count == 1
+
+
+def test_load_image_model_ids_force_bypasses_guard(reset_image_catalog):
+    """
+    ``force=True`` causes the API to be called again regardless of the loaded flag,
+    and the cache is updated with the fresh response.
+    """
+    api_models_v1 = ["flux"]
+    api_models_v2 = ["flux", "turbo", "gptimage"]
+
+    mock_v1 = MagicMock()
+    mock_v1.get_available_models.return_value = {"image": api_models_v1}
+    mock_v2 = MagicMock()
+    mock_v2.get_available_models.return_value = {"image": api_models_v2}
+
+    with patch(
+        "langchain_pollinations.models.ModelInformation",
+        side_effect=[mock_v1, mock_v2],
+    ) as mock_cls:
+        _load_image_model_ids(api_key="test_key")            # primera carga
+        result = _load_image_model_ids(api_key="test_key", force=True)  # refresco forzado
+
+    assert mock_cls.call_count == 2
+    assert result == api_models_v2
+    assert image_module._image_model_ids_cache == api_models_v2
+
+
+def test_load_image_model_ids_force_skips_empty_response_too(reset_image_catalog):
+    """
+    Even with ``force=True``, an empty API response does not wipe the cache.
+    The existing content (populated by a previous successful call) is retained.
+    """
+    populated_models = ["flux", "turbo"]
+    mock_v1 = MagicMock()
+    mock_v1.get_available_models.return_value = {"image": populated_models}
+    mock_v2 = MagicMock()
+    mock_v2.get_available_models.return_value = {"image": []}
+
+    with patch(
+        "langchain_pollinations.models.ModelInformation",
+        side_effect=[mock_v1, mock_v2],
+    ):
+        _load_image_model_ids(api_key="test_key")
+        _load_image_model_ids(api_key="test_key", force=True)
+
+    # El caché sigue teniendo el contenido de la primera carga exitosa.
+    assert image_module._image_model_ids_cache == populated_models
+
+
+def test_load_image_model_ids_returns_copy(reset_image_catalog):
+    """
+    The returned list is an independent copy; mutating it does not affect the
+    internal cache, preventing accidental external modification of shared state.
+    """
+    mock_info = MagicMock()
+    mock_info.get_available_models.return_value = {"image": ["flux"]}
+
+    with patch("langchain_pollinations.models.ModelInformation", return_value=mock_info):
+        result = _load_image_model_ids(api_key="test_key")
+
+    result.append("injected_model")
+
+    assert "injected_model" not in image_module._image_model_ids_cache
+
+
+def test_imagepollinations_known_model_no_warning(monkeypatch):
+    """
+    No catalog warning is emitted when the model ID is present in the cache.
+    """
+    monkeypatch.setattr(image_module, "_image_model_ids_loaded", True)
+    monkeypatch.setattr(image_module, "_image_model_ids_cache", ["flux", "turbo", "gptimage"])
+
+    with _warnings_module.catch_warnings(record=True) as caught:
+        _warnings_module.simplefilter("always")
+        ImagePollinations(api_key="test_key", model="flux")
+
+    # Filtrar exclusivamente los warnings del validador de catálogo.
+    catalog_warns = [w for w in caught if "image model catalog" in str(w.message).lower()]
+    assert len(catalog_warns) == 0
+
+
+def test_imagepollinations_unknown_model_emits_warning(monkeypatch):
+    """
+    A ``UserWarning`` is emitted when the model ID is absent from the cache,
+    and the warning message identifies the offending ID.
+    """
+    monkeypatch.setattr(image_module, "_image_model_ids_loaded", True)
+    monkeypatch.setattr(image_module, "_image_model_ids_cache", ["flux", "turbo"])
+
+    with pytest.warns(UserWarning, match="unknown-xyz-model"):
+        ImagePollinations(api_key="test_key", model="unknown-xyz-model")
+
+
+def test_imagepollinations_unknown_model_warning_mentions_catalog_size(monkeypatch):
+    """
+    The warning message includes the number of models in the loaded catalog,
+    giving the user context to interpret the warning.
+    """
+    catalog = ["flux", "turbo", "gptimage"]
+    monkeypatch.setattr(image_module, "_image_model_ids_loaded", True)
+    monkeypatch.setattr(image_module, "_image_model_ids_cache", catalog)
+
+    with pytest.warns(UserWarning, match=str(len(catalog))):
+        ImagePollinations(api_key="test_key", model="nonexistent-model")
+
+
+def test_imagepollinations_none_model_no_warning(monkeypatch):
+    """
+    No warning is emitted when ``model=None``; ``None`` means "use the API
+    default" and is always accepted without consulting the catalog.
+    """
+    monkeypatch.setattr(image_module, "_image_model_ids_loaded", True)
+    monkeypatch.setattr(image_module, "_image_model_ids_cache", ["flux", "turbo"])
+
+    with _warnings_module.catch_warnings(record=True) as caught:
+        _warnings_module.simplefilter("always")
+        ImagePollinations(api_key="test_key", model=None)
+
+    catalog_warns = [w for w in caught if "image model catalog" in str(w.message).lower()]
+    assert len(catalog_warns) == 0
+
+
+def test_imagepollinations_warning_emitted_only_once_per_instance(monkeypatch):
+    """
+    The catalog warning fires exactly once when the instance is created, not on
+    every subsequent call to ``generate()`` or ``invoke()``.
+
+    This guards against a regression where ``_validate_model_id`` was mistakenly
+    placed in ``ImagePromptParams``, causing it to fire on every ``_build_query()``
+    call (i.e., every generation request).
+    """
+    monkeypatch.setattr(image_module, "_image_model_ids_loaded", True)
+    monkeypatch.setattr(image_module, "_image_model_ids_cache", ["flux"])
+
+    with _warnings_module.catch_warnings(record=True) as caught:
+        _warnings_module.simplefilter("always")
+        # Instanciar con un modelo desconocido emite el warning.
+        client = ImagePollinations(api_key="test_key", model="unknown-model")
+        # Construir la query interna directamente (simula lo que _build_query hace
+        # por cada generate()) no debe emitir nuevos warnings de catálogo.
+        client._build_query()
+        client._build_query()
+
+    catalog_warns = [w for w in caught if "image model catalog" in str(w.message).lower()]
+    # Solo el warning de la construcción del ImagePollinations; ninguno de _build_query.
+    assert len(catalog_warns) == 1

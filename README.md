@@ -60,13 +60,13 @@ All four main classes also accept an explicit `api_key=` parameter on constructi
 
 ### Available text models
 
-| Group | Models |
-|---|---|
-| OpenAI | `openai`, `openai-fast`, `openai-large`, `openai-audio` |
-| Google | `gemini`, `gemini-fast`, `gemini-large`, `gemini-legacy`, `gemini-search` |
-| Anthropic | `claude`, `claude-fast`, `claude-large`, `claude-legacy` |
-| Reasoning | `perplexity-reasoning`, `perplexity-fast`, `deepseek` |
-| Other | `mistral`, `grok`, `kimi`, `qwen-coder`, `qwen-character`, `glm`, `minimax`, `nova-fast`, `midijourney`, `chickytutor`, `nomnom` |
+| Group | Models                                                                                                                        |
+|---|-------------------------------------------------------------------------------------------------------------------------------|
+| OpenAI | `openai`, `openai-fast`, `openai-large`, `openai-audio`                                                                       |
+| Google | `gemini`, `gemini-fast`, `gemini-large`, `gemini-legacy`, `gemini-search`                                                     |
+| Anthropic | `claude`, `claude-fast`, `claude-large`, `claude-legacy`                                                                      |
+| Reasoning | `perplexity-reasoning`, `perplexity-fast`, `deepseek`                                                                         |
+| Other | `mistral`, `grok`, `kimi`, `qwen-coder`, `qwen-safety`, `glm`, `minimax`, `nova-fast`, `midijourney`, `chickytutor`        |
 
 ### Basic chat completion
 
