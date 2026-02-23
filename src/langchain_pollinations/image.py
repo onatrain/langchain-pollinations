@@ -5,11 +5,13 @@ It facilitates image and video generation through the Pollinations.ai API.
 
 from __future__ import annotations
 
+import threading
+import warnings
 from typing import Any, Literal, Optional
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
@@ -17,8 +19,11 @@ from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
 DEFAULT_BASE_URL = "https://gen.pollinations.ai"
 
 
-# Enum de modelos según /image/{prompt} -> query param "model" en api.json.
-ImageModelId = Literal[
+# Alias para mantener compatibilidad de anotaciones mientras el catálogo se gestiona dinámicamente.
+ImageModelId = str
+
+# Catálogo de modelos conocidos en el momento del release
+_FALLBACK_IMAGE_MODEL_IDS: list[str] = [
     "kontext",
     "nanobanana",
     "nanobanana-pro",
@@ -27,6 +32,7 @@ ImageModelId = Literal[
     "gptimage",
     "gptimage-large",
     "flux",
+    "turbo",
     "zimage",
     "veo",
     "seedance",
@@ -38,6 +44,77 @@ ImageModelId = Literal[
     "grok-video",
     "ltx-2",
 ]
+
+# Caché mutable del catálogo. Se inicializa con el fallback y se actualiza
+# en la primera llamada exitosa a _load_image_model_ids().
+_image_model_ids_cache: list[str] = list(_FALLBACK_IMAGE_MODEL_IDS)
+
+# Primitivas de sincronización: la carga remota se ejecuta a lo sumo una vez
+# por proceso, incluso en contextos multi-hilo.
+_image_model_ids_lock: threading.Lock = threading.Lock()
+_image_model_ids_loaded: bool = False
+
+
+def _load_image_model_ids(
+    api_key: str | None = None,
+    *,
+    force: bool = False,
+) -> list[str]:
+    """
+    Fetch the list of available image model IDs from the Pollinations API and
+    update the module-level cache.
+
+    The remote call is made at most once per process lifetime. Subsequent calls
+    return the cached list immediately unless ``force=True`` is passed. If the
+    API call fails for any reason (network error, missing key, etc.), the cache
+    retains its current value without raising an exception.
+
+    Args:
+        api_key: API key forwarded to ``ModelInformation``. When ``None`` the
+            value is resolved from the ``POLLINATIONS_API_KEY`` environment
+            variable. If neither is available the call fails silently and the
+            fallback list is kept.
+        force: When ``True``, bypass the one-shot guard and re-fetch from the
+            API regardless of whether a previous successful call was already
+            made. Useful for explicit catalog refreshes at runtime.
+
+    Returns:
+        A copy of the current (possibly freshly updated) image model ID list.
+    """
+    global _image_model_ids_cache, _image_model_ids_loaded
+
+    # Lectura rápida fuera del lock: evita la contención en el caso común
+    # (catálogo ya cargado, force=False).
+    if _image_model_ids_loaded and not force:
+        return list(_image_model_ids_cache)
+
+    with _image_model_ids_lock:
+        # Segunda verificación dentro del lock (double-checked locking) para
+        # descartar la carrera entre hilos que pasaron el primer if.
+        if _image_model_ids_loaded and not force:
+            return list(_image_model_ids_cache)
+
+        try:
+            # Import local para evitar importaciones circulares al nivel de módulo
+            # (models.py e image.py comparten el mismo paquete).
+            from langchain_pollinations.models import ModelInformation  # noqa: PLC0415
+
+            info = ModelInformation(api_key=api_key)
+            ids: list[str] = info.get_available_models().get("image", [])
+
+            if ids:
+                _image_model_ids_cache = ids
+
+        except Exception:
+            # Cualquier fallo deja el caché intacto. Se marca como intentado
+            # igualmente para no reintentar en cada instantiación.
+            pass
+
+        # Marcar como intentado siempre: evita martillar el API en entornos
+        # sin conectividad. Usar force=True para forzar un reintento explícito.
+        _image_model_ids_loaded = True
+
+    return list(_image_model_ids_cache)
 
 
 Quality = Literal["low", "medium", "high", "hd"]
@@ -51,7 +128,7 @@ class ImagePromptParams(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    model: ImageModelId = "zimage"
+    model: str = "zimage"
     width: int = Field(default=1024, ge=0)
     height: int = Field(default=1024, ge=0)
 
@@ -104,7 +181,7 @@ class ImagePollinations(BaseModel):
     timeout_s: float = 120.0
 
     # Defaults del request
-    model: Optional[ImageModelId] = None
+    model: Optional[str] = None
     width: Optional[int] = None
     height: Optional[int] = None
     seed: Optional[int] = None
@@ -120,6 +197,36 @@ class ImagePollinations(BaseModel):
 
     _http: PollinationsHttpClient = PrivateAttr()
 
+    @field_validator("model", mode="after")
+    @classmethod
+    def _validate_model_id(cls, v: str | None) -> str | None:
+        """
+        Emit a ``UserWarning`` when the provided model ID is absent from the
+        known catalog, without blocking the request.
+
+        Validation is intentionally non-strict so that models newly added to
+        the API continue to work even before the local catalog is refreshed.
+        Only non-``None`` values are checked; ``None`` means "use the API
+        default" and is always accepted without warning.
+
+        Args:
+            v: The model ID string to validate, or ``None`` when unset.
+
+        Returns:
+            The original value unchanged.
+        """
+        # None significa "sin preferencia de modelo"; no hay nada que advertir.
+        if v is not None and _image_model_ids_cache and v not in _image_model_ids_cache:
+            warnings.warn(
+                f"Image model ID '{v}' is not in the known image model catalog "
+                f"({len(_image_model_ids_cache)} models loaded). "
+                "The request will proceed, but the API may return an error if the ID is invalid. "
+                "Call _load_image_model_ids(force=True) to refresh the catalog from the API.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return v
+
     def __init__(self, **data: Any) -> None:
         """
         Initialize the image client with provided configuration and credentials.
@@ -127,6 +234,12 @@ class ImagePollinations(BaseModel):
         Args:
             **data: Configuration parameters including api_key, base_url, and defaults.
         """
+        # Actualizar el catálogo de modelos ANTES de inicializar a la superclase,
+        # que es cuando Pydantic ejecuta los field_validators (incluyendo
+        # _validate_model_id). Se extrae api_key de data porque self aún no existe.
+        # La llamada no es operativa si el catálogo ya fue cargado en este proceso.
+        _load_image_model_ids(data.get("api_key"))
+
         super().__init__(**data)
         auth = AuthConfig.from_env_or_value(self.api_key)
         self._http = PollinationsHttpClient(
