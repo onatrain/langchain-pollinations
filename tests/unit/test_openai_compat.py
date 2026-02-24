@@ -1,1411 +1,923 @@
-import json
-from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, patch
+from __future__ import annotations
+
+import sys
+import types
+import builtins
+from typing import Any, TypedDict, Callable
+from unittest import mock
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from pydantic import BaseModel, Field
 
-from langchain_pollinations._openai_compat import (
-    _lc_tool_call_to_openai_tool_call,
-    _to_jsonable,
-    _infer_audio_format_from_mime,
-    _normalize_input_audio_part,
-    _normalize_content_part,
-    _normalize_message_content,
-    _extract_text_from_parts,
-    lc_messages_to_openai,
-    tool_to_openai_tool,
-    _safe_json_loads,
-)
+import langchain_pollinations._openai_compat as _openai_compat
 
 
-@pytest.fixture
-def api_key_from_env(monkeypatch) -> str:
-    """
-    Lee POLLINATIONS_API_KEY desde .env si existe, y lo inyecta en el entorno.
-    Si no existe o no define la variable, usa un valor por defecto para tests.
-    """
-    env_path = Path(".env")
-    api_key = "test_api_key_default"
+@pytest.fixture()
+def _audio_b64() -> str:
+    # Base64 "de mentira" para no depender de audio real en tests unitarios.
+    return "ZGF0YQ=="
 
-    if env_path.is_file():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            if key.strip() == "POLLINATIONS_API_KEY":
-                api_key = value.strip().strip("'").strip('"')
-                break
 
-    monkeypatch.setenv("POLLINATIONS_API_KEY", api_key)
-    return api_key
+@pytest.fixture()
+def _dummy_cache_control() -> dict[str, Any]:
+    # Estructura típica de cache_control (se usa en varios normalizadores).
+    return {"type": "ephemeral"}
 
 
-class MockBaseMessage:
-    def __init__(self, content: Any, **kwargs):
-        self.content = content
-        self.additional_kwargs = kwargs.get("additional_kwargs", {})
-        self.name = kwargs.get("name")
-        self.type = kwargs.get("type", "base")
-
-
-class MockSystemMessage(MockBaseMessage):
-    def __init__(self, content: Any, **kwargs):
-        super().__init__(content, **kwargs)
-        self.type = "system"
-
-
-class MockHumanMessage(MockBaseMessage):
-    def __init__(self, content: Any, **kwargs):
-        super().__init__(content, **kwargs)
-        self.type = "human"
-
-
-class MockAIMessage(MockBaseMessage):
-    def __init__(self, content: Any, **kwargs):
-        super().__init__(content, **kwargs)
-        self.type = "ai"
-        self.tool_calls = kwargs.get("tool_calls", [])
-        self.invalid_tool_calls = kwargs.get("invalid_tool_calls", [])
-
-
-class MockToolMessage(MockBaseMessage):
-    def __init__(self, content: Any, tool_call_id: str, **kwargs):
-        super().__init__(content, **kwargs)
-        self.type = "tool"
-        self.tool_call_id = tool_call_id
-
-
-def test_lc_tool_call_to_openai_tool_call_with_openai_format():
-    """Test cuando ya viene en formato OpenAI"""
-    tc = {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "arguments": '{"location": "NYC"}'
-        },
-        "id": "call_123"
-    }
-
-    result = _lc_tool_call_to_openai_tool_call(tc)
-
-    assert result == tc
-    assert result["type"] == "function"
-    assert result["id"] == "call_123"
-
-
-def test_lc_tool_call_to_openai_tool_call_with_lc_format():
-    """Test conversión desde formato LangChain"""
-    tc = {
-        "name": "get_weather",
-        "args": {"location": "NYC", "units": "celsius"},
-        "id": "call_456"
-    }
-
-    result = _lc_tool_call_to_openai_tool_call(tc)
-
-    assert result["type"] == "function"
-    assert result["function"]["name"] == "get_weather"
-    assert json.loads(result["function"]["arguments"]) == {"location": "NYC", "units": "celsius"}
-    assert result["id"] == "call_456"
-
-
-def test_lc_tool_call_to_openai_tool_call_with_string_args():
-    """Test cuando args ya es un string JSON"""
-    tc = {
-        "name": "calculate",
-        "args": '{"x": 5, "y": 10}',
-        "id": "call_789"
-    }
-
-    result = _lc_tool_call_to_openai_tool_call(tc)
-
-    assert result["function"]["arguments"] == '{"x": 5, "y": 10}'
-
-
-def test_lc_tool_call_to_openai_tool_call_without_id():
-    """Test cuando no hay id en el tool call"""
-    tc = {
-        "name": "test_tool",
-        "args": {}
-    }
-
-    result = _lc_tool_call_to_openai_tool_call(tc)
-
-    assert "id" not in result
-    assert result["type"] == "function"
-    assert result["function"]["name"] == "test_tool"
-
-
-def test_lc_tool_call_to_openai_tool_call_with_invalid_type():
-    """Test cuando no es un dict válido"""
-    with pytest.raises(TypeError, match="ToolCall must be dict"):
-        _lc_tool_call_to_openai_tool_call("not a dict")
-
-
-def test_lc_tool_call_to_openai_tool_call_with_none_args():
-    """Test cuando args es None"""
-    tc = {
-        "name": "no_args_tool",
-        "args": None
-    }
-
-    result = _lc_tool_call_to_openai_tool_call(tc)
-
-    assert result["function"]["arguments"] == "{}"
-
-
-def test_to_jsonable_with_primitives():
-    """Test conversión de tipos primitivos"""
-    assert _to_jsonable(None) is None
-    assert _to_jsonable("text") == "text"
-    assert _to_jsonable(42) == 42
-    assert _to_jsonable(3.14) == 3.14
-    assert _to_jsonable(True) is True
-
-
-def test_to_jsonable_with_dict():
-    """Test conversión de diccionario"""
-    data = {"key": "value", "nested": {"num": 123}}
-    result = _to_jsonable(data)
-
-    assert result == {"key": "value", "nested": {"num": 123}}
-
-
-def test_to_jsonable_with_list():
-    """Test conversión de lista"""
-    data = [1, "two", {"three": 3}]
-    result = _to_jsonable(data)
-
-    assert result == [1, "two", {"three": 3}]
-
-
-def test_to_jsonable_with_tuple():
-    """Test conversión de tupla a lista"""
-    data = (1, 2, 3)
-    result = _to_jsonable(data)
-
-    assert result == [1, 2, 3]
-
-
-def test_to_jsonable_with_model_dump():
-    """Test con objeto que tiene model_dump()"""
-    obj = MagicMock()
-    obj.model_dump.return_value = {"field": "value"}
-
-    result = _to_jsonable(obj)
-
-    assert result == {"field": "value"}
-    obj.model_dump.assert_called_once()
-
-
-def test_to_jsonable_with_dict_method():
-    """Test con objeto que tiene dict()"""
-    obj = MagicMock()
-    obj.model_dump = None
-    obj.dict.return_value = {"field": "value"}
-
-    result = _to_jsonable(obj)
-
-    assert result == {"field": "value"}
-    obj.dict.assert_called_once()
-
-
-def test_to_jsonable_with_vars():
-    """Test con objeto usando vars()"""
-    class SimpleObj:
-        def __init__(self):
-            self.field = "value"
-
-    obj = SimpleObj()
-    result = _to_jsonable(obj)
-
-    assert result == {"field": "value"}
-
-
-def test_infer_audio_format_mp3():
-    """Test inferencia de formato MP3"""
-    assert _infer_audio_format_from_mime("audio/mpeg") == "mp3"
-    assert _infer_audio_format_from_mime("audio/mp3") == "mp3"
-    assert _infer_audio_format_from_mime("AUDIO/MPEG") == "mp3"
-
-
-def test_infer_audio_format_wav():
-    """Test inferencia de formato WAV"""
-    assert _infer_audio_format_from_mime("audio/wav") == "wav"
-    assert _infer_audio_format_from_mime("audio/wave") == "wav"
-    assert _infer_audio_format_from_mime("audio/x-wav") == "wav"
-
-
-def test_infer_audio_format_flac():
-    """Test inferencia de formato FLAC"""
-    assert _infer_audio_format_from_mime("audio/flac") == "flac"
-
-
-def test_infer_audio_format_opus():
-    """Test inferencia de formato Opus"""
-    assert _infer_audio_format_from_mime("audio/opus") == "opus"
-
-
-def test_infer_audio_format_pcm16():
-    """Test inferencia de formato PCM16"""
-    assert _infer_audio_format_from_mime("audio/pcm") == "pcm16"
-    assert _infer_audio_format_from_mime("audio/l16") == "pcm16"
-
-
-def test_infer_audio_format_from_suffix():
-    """Test inferencia desde sufijo del MIME type"""
-    assert _infer_audio_format_from_mime("audio/opus") == "opus"
-
-
-def test_infer_audio_format_empty_or_invalid():
-    """Test con MIME type vacío o inválido"""
-    assert _infer_audio_format_from_mime("") is None
-    assert _infer_audio_format_from_mime("   ") is None
-    assert _infer_audio_format_from_mime("text/plain") is None
-    assert _infer_audio_format_from_mime("invalid") is None
-
-
-def test_normalize_input_audio_part_already_correct():
-    """Test cuando el part ya está bien formado"""
-    part = {
-        "type": "input_audio",
-        "input_audio": {
-            "data": "base64data",
-            "format": "mp3"
-        }
-    }
-
-    result = _normalize_input_audio_part(part)
-
-    assert result["type"] == "input_audio"
-    assert result["input_audio"]["data"] == "base64data"
-    assert result["input_audio"]["format"] == "mp3"
-
-
-def test_normalize_input_audio_part_with_base64_and_mime():
-    """Test con formato legacy usando base64 y mime_type"""
-    part = {
-        "type": "input_audio",
-        "base64": "encodeddata",
-        "mime_type": "audio/mp3"
-    }
-
-    result = _normalize_input_audio_part(part)
-
-    assert result["type"] == "input_audio"
-    assert result["input_audio"]["data"] == "encodeddata"
-    assert result["input_audio"]["format"] == "mp3"
-    assert "base64" not in result
-    assert "mime_type" not in result
-
-
-def test_normalize_input_audio_part_with_data_and_format_top_level():
-    """Test con data y format en el nivel superior"""
-    part = {
-        "type": "input_audio",
-        "data": "audiodata",
-        "format": "wav"
-    }
-
-    result = _normalize_input_audio_part(part)
-
-    assert result["input_audio"]["data"] == "audiodata"
-    assert result["input_audio"]["format"] == "wav"
-
-
-def test_normalize_input_audio_part_with_audio_object():
-    """Test con objeto audio en el nivel superior"""
-    part = {
-        "type": "input_audio",
-        "audio": {
-            "data": "audiodata",
-            "format": "flac"
-        }
-    }
-
-    result = _normalize_input_audio_part(part)
-
-    assert result["input_audio"]["data"] == "audiodata"
-    assert result["input_audio"]["format"] == "flac"
-    assert "audio" not in result
-
-
-def test_normalize_input_audio_part_default_format():
-    """Test que usa mp3 como formato por defecto"""
-    part = {
-        "type": "input_audio",
-        "data": "somedata"
-    }
-
-    result = _normalize_input_audio_part(part)
-
-    assert result["input_audio"]["format"] == "mp3"
-
-
-def test_normalize_input_audio_part_missing_data():
-    """Test cuando falta data"""
-    part = {
-        "type": "input_audio",
-        "format": "mp3"
-    }
-
-    result = _normalize_input_audio_part(part)
-
-    assert result["input_audio"]["data"] == ""
-
-
-def test_normalize_content_part_text():
-    """Test normalización de part tipo text"""
-    part = {
-        "type": "text",
-        "text": "Hello world",
-        "id": "should_be_removed"
-    }
-
-    result = _normalize_content_part(part)
-
-    assert result["type"] == "text"
-    assert result["text"] == "Hello world"
-    assert "id" not in result
-
-
-def test_normalize_content_part_text_with_cache_control():
-    """Test text part con cache_control"""
-    part = {
-        "type": "text",
-        "text": "Cached text",
-        "cache_control": {"type": "ephemeral"}
-    }
-
-    result = _normalize_content_part(part)
-
-    assert result["cache_control"] == {"type": "ephemeral"}
-
-
-def test_normalize_content_part_audio_to_input_audio():
-    """Test conversión de tipo 'audio' a 'input_audio'"""
-    part = {
-        "type": "audio",
-        "audio": {
-            "data": "audiodata",
-            "format": "mp3"
-        }
-    }
-
-    result = _normalize_content_part(part)
-
-    assert result["type"] == "input_audio"
-    assert result["input_audio"]["data"] == "audiodata"
-
-
-def test_normalize_content_part_non_dict():
-    """Test con part que no es dict"""
-    part = "plain string"
-    result = _normalize_content_part(part)
-
-    assert result == "plain string"
-
-
-def test_normalize_content_part_removes_id():
-    """Test que siempre remueve el campo id"""
-    part = {
-        "type": "image_url",
-        "id": "img_123",
-        "image_url": {"url": "https://example.com/img.png"}
-    }
-
-    result = _normalize_content_part(part)
-
-    assert "id" not in result
-    assert result["image_url"]["url"] == "https://example.com/img.png"
-
-
-def test_normalize_message_content_string():
-    """Test con contenido string"""
-    content = "Simple text message"
-    result = _normalize_message_content(content)
-
-    assert result == "Simple text message"
-
-
-def test_normalize_message_content_list():
-    """Test con contenido lista de parts"""
-    content = [
-        {"type": "text", "text": "Hello", "id": "1"},
-        {"type": "text", "text": "World", "id": "2"}
-    ]
-
-    result = _normalize_message_content(content)
-
-    assert len(result) == 2
-    assert result[0]["text"] == "Hello"
-    assert "id" not in result[0]
-    assert result[1]["text"] == "World"
-    assert "id" not in result[1]
-
-
-def test_normalize_message_content_other():
-    """Test con contenido de otro tipo"""
-    content = {"custom": "object"}
-    result = _normalize_message_content(content)
-
-    assert result == {"custom": "object"}
-
-
-def test_extract_text_from_parts_string():
-    """Test extracción desde string"""
-    content = "Plain text"
-    result = _extract_text_from_parts(content)
-
-    assert result == "Plain text"
-
-
-def test_extract_text_from_parts_list_with_text_parts():
-    """Test extracción desde lista de text parts"""
-    content = [
-        {"type": "text", "text": "First"},
-        {"type": "text", "text": "Second"}
-    ]
-
-    result = _extract_text_from_parts(content)
-
-    assert result == "First\nSecond"
-
-
-def test_extract_text_from_parts_mixed_list():
-    """Test con lista mixta de strings y dicts"""
-    content = [
-        "Plain string",
-        {"type": "text", "text": "Dict text"},
-        {"content": "Content field"}
-    ]
-
-    result = _extract_text_from_parts(content)
-
-    assert "Plain string" in result
-    assert "Dict text" in result
-    assert "Content field" in result
-
-
-def test_extract_text_from_parts_non_list():
-    """Test con contenido que no es lista"""
-    content = {"some": "dict"}
-    result = _extract_text_from_parts(content)
-
-    assert "some" in result
-
-
-def test_extract_text_from_parts_empty_list():
-    """Test con lista vacía"""
-    content = []
-    result = _extract_text_from_parts(content)
-
-    assert result == ""
-
-
-def test_lc_messages_to_openai_system_message():
-    """Test conversión de SystemMessage"""
-    with patch('langchain_pollinations._openai_compat.SystemMessage', MockSystemMessage):
-        msg = MockSystemMessage("You are a helpful assistant")
-
-        result = lc_messages_to_openai([msg])
-
-        assert len(result) == 1
-        assert result[0]["role"] == "system"
-        assert result[0]["content"] == "You are a helpful assistant"
-
-
-def test_lc_messages_to_openai_human_message():
-    """Test conversión de HumanMessage"""
-    with patch('langchain_pollinations._openai_compat.HumanMessage', MockHumanMessage):
-        msg = MockHumanMessage("Hello!")
-
-        result = lc_messages_to_openai([msg])
-
-        assert len(result) == 1
-        assert result[0]["role"] == "user"
-        assert result[0]["content"] == "Hello!"
-
-
-def test_lc_messages_to_openai_ai_message():
-    """Test conversión de AIMessage"""
-    with patch('langchain_pollinations._openai_compat.AIMessage', MockAIMessage):
-        msg = MockAIMessage("Hi there!")
-
-        result = lc_messages_to_openai([msg])
-
-        assert len(result) == 1
-        assert result[0]["role"] == "assistant"
-        assert result[0]["content"] == "Hi there!"
-
-
-def test_lc_messages_to_openai_ai_message_with_tool_calls():
-    """Test AIMessage con tool_calls"""
-    with patch('langchain_pollinations._openai_compat.AIMessage', MockAIMessage):
-        msg = MockAIMessage(
-            "Let me check that",
-            tool_calls=[{
-                "name": "get_weather",
-                "args": {"location": "NYC"},
-                "id": "call_1"
-            }]
-        )
-
-        result = lc_messages_to_openai([msg])
-
-        assert len(result) == 1
-        assert "tool_calls" in result[0]
-        assert len(result[0]["tool_calls"]) == 1
-        assert result[0]["tool_calls"][0]["function"]["name"] == "get_weather"
-
-
-def test_lc_messages_to_openai_tool_message():
-    """Test conversión de ToolMessage"""
-    with patch('langchain_pollinations._openai_compat.ToolMessage', MockToolMessage):
-        msg = MockToolMessage(
-            content="Weather is sunny",
-            tool_call_id="call_1"
-        )
-
-        result = lc_messages_to_openai([msg])
-
-        assert len(result) == 1
-        assert result[0]["role"] == "tool"
-        assert result[0]["content"] == "Weather is sunny"
-        assert result[0]["tool_call_id"] == "call_1"
-        assert "name" not in result[0]
-
-
-def test_lc_messages_to_openai_message_with_name():
-    """Test mensaje con campo name"""
-    with patch('langchain_pollinations._openai_compat.HumanMessage', MockHumanMessage):
-        msg = MockHumanMessage("Hello", name="John")
-
-        result = lc_messages_to_openai([msg])
-
-        assert result[0]["name"] == "John"
-
-
-def test_lc_messages_to_openai_message_with_cache_control():
-    """Test mensaje con cache_control"""
-    with patch('langchain_pollinations._openai_compat.SystemMessage', MockSystemMessage):
-        msg = MockSystemMessage(
-            "System prompt",
-            additional_kwargs={"cache_control": {"type": "ephemeral"}}
-        )
-
-        result = lc_messages_to_openai([msg])
-
-        assert "cache_control" in result[0]
-        assert result[0]["cache_control"]["type"] == "ephemeral"
-
-
-def test_lc_messages_to_openai_multipart_content():
-    """Test con contenido multipart"""
-    with patch('langchain_pollinations._openai_compat.HumanMessage', MockHumanMessage):
-        msg = MockHumanMessage([
-            {"type": "text", "text": "Look at this", "id": "1"},
-            {"type": "image_url", "image_url": {"url": "http://example.com/img.png"}, "id": "2"}
-        ])
-
-        result = lc_messages_to_openai([msg])
-
-        assert isinstance(result[0]["content"], list)
-        assert len(result[0]["content"]) == 2
-        assert "id" not in result[0]["content"][0]
-
-
-def test_lc_messages_to_openai_multiple_messages():
-    """Test con múltiples mensajes"""
-    with patch('langchain_pollinations._openai_compat.SystemMessage', MockSystemMessage), \
-         patch('langchain_pollinations._openai_compat.HumanMessage', MockHumanMessage), \
-         patch('langchain_pollinations._openai_compat.AIMessage', MockAIMessage):
-
-        messages = [
-            MockSystemMessage("System"),
-            MockHumanMessage("User"),
-            MockAIMessage("Assistant")
-        ]
-
-        result = lc_messages_to_openai(messages)
-
-        assert len(result) == 3
-        assert result[0]["role"] == "system"
-        assert result[1]["role"] == "user"
-        assert result[2]["role"] == "assistant"
-
-
-def test_tool_to_openai_tool_already_dict():
-    """Test cuando ya es un dict en formato OpenAI"""
-    tool = {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Get weather",
-            "parameters": {"type": "object", "properties": {}}
-        }
-    }
-
-    result = tool_to_openai_tool(tool)
-
-    assert result == tool
-
-
-def test_tool_to_openai_tool_with_args_schema():
-    """Test con tool que tiene args_schema"""
-    tool = MagicMock()
-    tool.name = "calculator"
-    tool.description = "Perform calculations"
-
-    schema_mock = MagicMock()
-    schema_mock.model_json_schema.return_value = {
-        "type": "object",
-        "properties": {
-            "x": {"type": "number"},
-            "y": {"type": "number"}
-        }
-    }
-    tool.args_schema = schema_mock
-
-    result = tool_to_openai_tool(tool)
-
-    assert result["type"] == "function"
-    assert result["function"]["name"] == "calculator"
-    assert result["function"]["description"] == "Perform calculations"
-    assert "x" in result["function"]["parameters"]["properties"]
-
-
-def test_tool_to_openai_tool_with_tool_call_schema():
-    """Test con tool que tiene tool_call_schema"""
-    tool = MagicMock()
-    tool.name = "search"
-    tool.description = "Search the web"
-    tool.args_schema = None
-
-    schema_mock = MagicMock()
-    schema_mock.model_json_schema.return_value = {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string"}
-        }
-    }
-    tool.tool_call_schema = schema_mock
-
-    result = tool_to_openai_tool(tool)
-
-    assert result["function"]["name"] == "search"
-    assert "query" in result["function"]["parameters"]["properties"]
-
-
-def test_tool_to_openai_tool_with_get_input_schema():
-    """Test con tool que tiene get_input_schema()"""
-    tool = MagicMock()
-    tool.name = "analyzer"
-    tool.description = None
-    tool.args_schema = None
-    tool.tool_call_schema = None
-
-    schema_obj = MagicMock()
-    schema_obj.model_json_schema.return_value = {
-        "type": "object",
-        "properties": {
-            "data": {"type": "string"}
-        }
-    }
-    tool.get_input_schema.return_value = schema_obj
-
-    result = tool_to_openai_tool(tool)
-
-    assert result["function"]["name"] == "analyzer"
-    assert "data" in result["function"]["parameters"]["properties"]
-
-
-def test_tool_to_openai_tool_pydantic_model():
-    """Test con Pydantic BaseModel como tool"""
-    try:
-        from pydantic import BaseModel, Field
-
-        class WeatherInput(BaseModel):
-            location: str = Field(description="City name")
-            units: str = "celsius"
-
-        WeatherInput.__name__ = "get_weather"
-        WeatherInput.__doc__ = "Get weather information"
-
-        result = tool_to_openai_tool(WeatherInput)
-
-        assert result["type"] == "function"
-        assert result["function"]["name"] == "get_weather"
-        assert "location" in result["function"]["parameters"]["properties"]
-    except ImportError:
-        pytest.skip("Pydantic not available")
-
-
-def test_tool_to_openai_tool_fallback_empty_schema():
-    """Test fallback cuando no se puede inferir schema"""
-    tool = MagicMock()
-    tool.name = "simple_tool"
-    tool.description = "A simple tool"
-    tool.args_schema = None
-    tool.tool_call_schema = None
-    tool.get_input_schema = MagicMock(side_effect=Exception("No schema"))
-
-    result = tool_to_openai_tool(tool)
-
-    assert result["type"] == "function"
-    assert result["function"]["name"] == "simple_tool"
-    assert result["function"]["parameters"]["type"] == "object"
-
-
-def test_tool_to_openai_tool_uses_docstring_as_description():
-    """Test que usa __doc__ como description"""
-    tool = MagicMock()
-    tool.name = "doc_tool"
-    tool.description = None
-    tool.__doc__ = "This is from docstring"
-    tool.args_schema = None
-
-    result = tool_to_openai_tool(tool)
-
-    assert result["function"]["description"] == "This is from docstring"
-
-
-def test_tool_to_openai_tool_with_langchain_converter():
-    """Test usando el convertidor de LangChain si está disponible"""
-    with patch('langchain_core.utils.function_calling.convert_to_openai_tool') as mock_convert:
-        mock_convert.return_value = {
+class Test__lc_tool_call_to_openai_tool_call:
+    def test_passthrough_openai_compatible_dict(self) -> None:
+        tc = {
             "type": "function",
-            "function": {
-                "name": "lc_tool",
-                "parameters": {"type": "object", "properties": {"arg": {"type": "string"}}}
-            }
+            "function": {"name": "f", "arguments": "{}"},
+            "id": "call_1",
+        }
+        out = _openai_compat._lc_tool_call_to_openai_tool_call(tc)
+        # Si ya es compatible, debe devolver el mismo dict.
+        assert out is tc
+
+    def test_raises_on_non_dict(self) -> None:
+        with pytest.raises(TypeError):
+            _openai_compat._lc_tool_call_to_openai_tool_call("no-es-dict")  # type: ignore[arg-type]
+
+    def test_converts_name_args_dict_and_preserves_id(self) -> None:
+        tc = {"name": "sumar", "args": {"a": 1, "b": 2}, "id": "abc"}
+        out = _openai_compat._lc_tool_call_to_openai_tool_call(tc)
+
+        assert out["type"] == "function"
+        assert out["function"]["name"] == "sumar"
+        assert out["function"]["arguments"] == '{"a": 1, "b": 2}'
+        assert out["id"] == "abc"
+
+    def test_args_as_string_is_used_as_arguments(self) -> None:
+        tc = {"name": "tool", "args": '{"x": 1}'}
+        out = _openai_compat._lc_tool_call_to_openai_tool_call(tc)
+        assert out["function"]["arguments"] == '{"x": 1}'
+
+    def test_args_json_dumps_failure_falls_back_to_empty_object(self) -> None:
+        # Un set no es serializable por json.dumps.
+        tc = {"name": "tool", "args": {"x": {1, 2, 3}}}
+        out = _openai_compat._lc_tool_call_to_openai_tool_call(tc)
+        assert out["function"]["arguments"] == "{}"
+
+
+class Test__to_jsonable:
+    def test_primitives_and_none(self) -> None:
+        assert _openai_compat._to_jsonable(None) is None
+        assert _openai_compat._to_jsonable("x") == "x"
+        assert _openai_compat._to_jsonable(1) == 1
+        assert _openai_compat._to_jsonable(1.5) == 1.5
+        assert _openai_compat._to_jsonable(True) is True
+
+    def test_dict_and_list_recursive(self) -> None:
+        obj = {"a": 1, 2: {"b": [1, 2, {"c": 3}]}}
+        out = _openai_compat._to_jsonable(obj)
+        # Las claves deben volverse str.
+        assert out["a"] == 1
+        assert out["2"]["b"][2]["c"] == 3
+
+    def test_model_dump_is_preferred_when_available(self) -> None:
+        class HasModelDump:
+            def model_dump(self) -> dict[str, Any]:
+                return {"x": 1, "y": {"z": 2}}
+
+        out = _openai_compat._to_jsonable(HasModelDump())
+        assert out == {"x": 1, "y": {"z": 2}}
+
+    def test_dict_method_used_when_model_dump_fails(self) -> None:
+        class HasBoth:
+            def model_dump(self) -> dict[str, Any]:
+                raise RuntimeError("boom")
+
+            def dict(self) -> dict[str, Any]:
+                return {"y": 2}
+
+        out = _openai_compat._to_jsonable(HasBoth())
+        assert out == {"y": 2}
+
+    def test_vars_fallback(self) -> None:
+        class Plain:
+            def __init__(self) -> None:
+                self.a = 1
+                self.b = {"c": 2}
+
+        out = _openai_compat._to_jsonable(Plain())
+        assert out == {"a": 1, "b": {"c": 2}}
+
+
+class Test__infer_audio_format_from_mime:
+    @pytest.mark.parametrize(
+        "mime,expected",
+        [
+            ("audio/mpeg", "mp3"),
+            ("audio/mp3", "mp3"),
+            ("audio/wav", "wav"),
+            ("audio/wave", "wav"),
+            ("audio/x-wav", "wav"),
+            ("audio/flac", "flac"),
+            ("audio/opus", "opus"),
+            ("audio/pcm", "pcm16"),
+            ("audio/l16", "pcm16"),
+            ("audio/pcm16", "pcm16"),  # fallback por sufijo permitido
+        ],
+    )
+    def test_known_mimes(self, mime: str, expected: str) -> None:
+        assert _openai_compat._infer_audio_format_from_mime(mime) == expected
+
+    def test_empty_or_unknown_returns_none(self) -> None:
+        assert _openai_compat._infer_audio_format_from_mime("") is None
+        assert _openai_compat._infer_audio_format_from_mime("application/json") is None
+
+    def test_whitespace_and_case_is_normalized(self) -> None:
+        assert _openai_compat._infer_audio_format_from_mime("  AuDiO/MpEg  ") == "mp3"
+
+
+class Test__normalize_input_audio_part:
+    def test_already_well_formed_is_kept_and_cleaned(self, _audio_b64: str) -> None:
+        part = {
+            "type": "input_audio",
+            "input_audio": {"data": _audio_b64, "format": "mp3"},
+            # Campos extra que deben ser eliminados.
+            "base64": "x",
+            "mime_type": "audio/mpeg",
+            "id": "should-go-away",
+            "audio": {"data": "x"},
+            "data": "x",
+            "format": "wav",
+        }
+        out = _openai_compat._normalize_input_audio_part(part)
+
+        assert out["type"] == "input_audio"
+        assert out["input_audio"] == {"data": _audio_b64, "format": "mp3"}
+        # Verifica limpieza.
+        for k in ("base64", "mime_type", "id", "audio", "data", "format"):
+            assert k not in out
+
+    def test_extracts_from_base64_and_mime_type(self, _audio_b64: str) -> None:
+        part = {"type": "input_audio", "base64": _audio_b64, "mime_type": "audio/wav"}
+        out = _openai_compat._normalize_input_audio_part(part)
+        assert out["type"] == "input_audio"
+        assert out["input_audio"]["data"] == _audio_b64
+        assert out["input_audio"]["format"] == "wav"
+
+    def test_extracts_from_nested_audio_object(self, _audio_b64: str) -> None:
+        part = {"type": "input_audio", "audio": {"base64": _audio_b64, "mime_type": "audio/flac"}}
+        out = _openai_compat._normalize_input_audio_part(part)
+        assert out["input_audio"] == {"data": _audio_b64, "format": "flac"}
+
+    def test_missing_data_defaults_to_empty_string_and_format_defaults_to_mp3(self) -> None:
+        part = {"type": "input_audio", "mime_type": "application/octet-stream"}
+        out = _openai_compat._normalize_input_audio_part(part)
+        assert out["input_audio"]["data"] == ""
+        assert out["input_audio"]["format"] == "mp3"
+
+    def test_invalid_format_defaults_to_mp3(self, _audio_b64: str) -> None:
+        part = {"type": "input_audio", "data": _audio_b64, "format": "aac"}
+        out = _openai_compat._normalize_input_audio_part(part)
+        assert out["input_audio"]["format"] == "mp3"
+
+
+class Test__normalize_video_url_part:
+    def test_canonical_nested_form(self) -> None:
+        part = {"type": "video_url", "video_url": {"url": "https://x/v.mp4", "mime_type": "video/mp4"}}
+        out = _openai_compat._normalize_video_url_part(part)
+        assert out == {"type": "video_url", "video_url": {"url": "https://x/v.mp4", "mime_type": "video/mp4"}}
+
+    def test_flat_variant_is_normalized(self) -> None:
+        part = {"type": "video_url", "url": "https://x/v.mp4", "mime_type": "video/mp4"}
+        out = _openai_compat._normalize_video_url_part(part)
+        assert out == {"type": "video_url", "video_url": {"url": "https://x/v.mp4", "mime_type": "video/mp4"}}
+
+    def test_missing_url_returns_type_corrected_but_unmodified(self) -> None:
+        part = {"type": "video_url", "mime_type": "video/mp4", "video_url": {"mime_type": "video/mp4"}}
+        out = _openai_compat._normalize_video_url_part(part)
+        assert out.get("type") == "video_url"
+        assert "video_url" in out  # se preserva lo que venga, el backend dará el error final
+
+
+class Test__normalize_file_part:
+    def test_canonical_nested_form_only_non_empty_strings(self) -> None:
+        part = {
+            "type": "file",
+            "file": {
+                "file_url": "https://x/doc.pdf",
+                "mime_type": "application/pdf",
+                "file_name": "",
+                "file_id": None,
+            },
+        }
+        out = _openai_compat._normalize_file_part(part)
+        assert out == {
+            "type": "file",
+            "file": {"file_url": "https://x/doc.pdf", "mime_type": "application/pdf"},
         }
 
-        tool = MagicMock()
-
-        result = tool_to_openai_tool(tool)
-
-        assert result["function"]["name"] == "lc_tool"
-
-
-def test_safe_json_loads_valid_json():
-    """Test con JSON válido"""
-    json_str = '{"key": "value", "number": 42}'
-    result = _safe_json_loads(json_str)
-
-    assert result == {"key": "value", "number": 42}
-
-
-def test_safe_json_loads_valid_array():
-    """Test con array JSON válido"""
-    json_str = '[1, 2, 3, "four"]'
-    result = _safe_json_loads(json_str)
-
-    assert result == [1, 2, 3, "four"]
-
-
-def test_safe_json_loads_invalid_json():
-    """Test con JSON inválido devuelve el string original"""
-    json_str = '{invalid json}'
-    result = _safe_json_loads(json_str)
-
-    assert result == '{invalid json}'
-
-
-def test_safe_json_loads_empty_string():
-    """Test con string vacío"""
-    result = _safe_json_loads('')
-
-    assert result == ''
-
-
-def test_safe_json_loads_malformed_json():
-    """Test con JSON mal formado"""
-    json_str = '{"key": "value", "missing": }'
-    result = _safe_json_loads(json_str)
-
-    assert result == json_str
-
-
-def test_safe_json_loads_partial_json():
-    """Test con JSON parcial"""
-    json_str = '{"incomplete":'
-    result = _safe_json_loads(json_str)
-
-    assert result == json_str
-
-
-def test_lc_tool_call_to_openai_tool_call_with_serialization_error_in_args():
-    """Test cuando json.dumps falla con los args"""
-    class NonSerializable:
-        pass
-
-    tc = {
-        "name": "tool_with_bad_args",
-        "args": NonSerializable()
-    }
-
-    result = _lc_tool_call_to_openai_tool_call(tc)
-
-    # Debe manejar el error y devolver "{}"
-    assert result["function"]["arguments"] == "{}"
-
-
-def test_lc_tool_call_to_openai_tool_call_without_name():
-    """Test cuando el tool call no tiene name"""
-    tc = {
-        "args": {"x": 1}
-    }
-
-    result = _lc_tool_call_to_openai_tool_call(tc)
-
-    assert result["function"]["name"] == ""
-    assert result["type"] == "function"
-
-
-def test_to_jsonable_with_model_dump_exception():
-    """Test cuando model_dump lanza excepción"""
-    obj = MagicMock()
-    obj.model_dump.side_effect = Exception("Failed to dump")
-    obj.dict.return_value = {"fallback": "dict"}
-
-    result = _to_jsonable(obj)
-
-    assert result == {"fallback": "dict"}
-
-
-def test_to_jsonable_with_dict_method_exception():
-    """Test cuando dict() lanza excepción"""
-    obj = MagicMock()
-    delattr(obj, 'model_dump')
-    obj.dict.side_effect = Exception("Failed dict")
-
-    # Debe caer a vars()
-    result = _to_jsonable(obj)
-
-    # vars() de MagicMock incluirá atributos internos
-    assert isinstance(result, (dict, MagicMock))
-
-
-def test_to_jsonable_with_vars_exception():
-    """Test cuando vars() falla, devuelve el objeto tal cual"""
-    # Un objeto sin __dict__ causará que vars() falle
-    obj = object()
-
-    result = _to_jsonable(obj)
-
-    # Debe devolver el objeto original
-    assert result is obj
-
-
-def test_infer_audio_format_from_mime_with_unknown_suffix():
-    """Test con MIME type con sufijo no reconocido"""
-    result = _infer_audio_format_from_mime("audio/unknown-format")
-
-    assert result is None
-
-
-def test_infer_audio_format_from_mime_without_slash():
-    """Test con MIME type sin slash"""
-    result = _infer_audio_format_from_mime("audiomp3")
-
-    assert result is None
-
-
-def test_normalize_input_audio_part_with_audio_base64():
-    """Test con audio.base64 en lugar de audio.data"""
-    part = {
-        "type": "input_audio",
-        "audio": {
-            "base64": "base64encodeddata",
-            "format": "opus"
+    def test_flat_variant_is_normalized(self, _dummy_cache_control: dict[str, Any]) -> None:
+        part = {
+            "type": "file",
+            "file_url": "https://x/doc.pdf",
+            "mime_type": "application/pdf",
+            "cache_control": _dummy_cache_control,
         }
-    }
+        out = _openai_compat._normalize_file_part(part)
+        assert out["type"] == "file"
+        assert out["file"]["file_url"] == "https://x/doc.pdf"
+        assert out["file"]["mime_type"] == "application/pdf"
+        assert out["cache_control"] == _dummy_cache_control
 
-    result = _normalize_input_audio_part(part)
 
-    assert result["input_audio"]["data"] == "base64encodeddata"
-    assert result["input_audio"]["format"] == "opus"
+class Test__normalize_content_part_and__normalize_message_content:
+    def test_non_dict_part_is_returned_as_is(self) -> None:
+        assert _openai_compat._normalize_content_part("hola") == "hola"
 
+    def test_removes_id_for_unknown_part_type(self) -> None:
+        part = {"type": "image_url", "id": "no-permitido", "image_url": {"url": "https://x/img.png"}}
+        out = _openai_compat._normalize_content_part(part)
+        assert out["type"] == "image_url"
+        assert "id" not in out
 
-def test_normalize_input_audio_part_with_audio_mime_type():
-    """Test con audio.mime_type para inferir formato"""
-    part = {
-        "type": "input_audio",
-        "audio": {
-            "data": "somedata",
-            "mime_type": "audio/wav"
+    def test_text_part_is_strict_and_preserves_cache_control_variants(self, _dummy_cache_control: dict[str, Any]) -> None:
+        part = {
+            "type": "text",
+            "text": "hola",
+            "id": "remove",
+            "cache_control": _dummy_cache_control,
+            "cacheControl": {"type": "other"},
+            "cachecontrol": {"type": "another"},
+            "extra": "ignored",
         }
-    }
+        out = _openai_compat._normalize_content_part(part)
+        assert out["type"] == "text"
+        assert out["text"] == "hola"
+        assert out["cache_control"] == _dummy_cache_control
+        assert out["cacheControl"] == {"type": "other"}
+        assert out["cachecontrol"] == {"type": "another"}
+        assert "extra" not in out
+        assert "id" not in out
 
-    result = _normalize_input_audio_part(part)
+    def test_audio_type_is_converted_to_input_audio(self, _audio_b64: str) -> None:
+        part = {"type": "audio", "audio": {"data": _audio_b64, "format": "mp3"}, "id": "remove"}
+        out = _openai_compat._normalize_content_part(part)
+        assert out["type"] == "input_audio"
+        assert out["input_audio"] == {"data": _audio_b64, "format": "mp3"}
+        assert "id" not in out
 
-    assert result["input_audio"]["format"] == "wav"
+    def test_input_audio_is_normalized(self, _audio_b64: str) -> None:
+        part = {"type": "input_audio", "data": _audio_b64, "format": "wav"}
+        out = _openai_compat._normalize_content_part(part)
+        assert out["type"] == "input_audio"
+        assert out["input_audio"]["format"] == "wav"
 
+    def test_video_url_is_normalized(self) -> None:
+        part = {"type": "video_url", "url": "https://x/v.mp4"}
+        out = _openai_compat._normalize_content_part(part)
+        assert out == {"type": "video_url", "video_url": {"url": "https://x/v.mp4"}}
 
-def test_normalize_input_audio_part_with_invalid_format():
-    """Test con formato inválido no en _ALLOWED_AUDIO_FORMATS"""
-    part = {
-        "type": "input_audio",
-        "data": "audiodata",
-        "format": "invalid_format"
-    }
+    def test_file_is_normalized(self) -> None:
+        part = {"type": "file", "file_url": "https://x/doc.pdf"}
+        out = _openai_compat._normalize_content_part(part)
+        assert out == {"type": "file", "file": {"file_url": "https://x/doc.pdf"}}
 
-    result = _normalize_input_audio_part(part)
+    def test__normalize_message_content_string_and_list_and_other(self) -> None:
+        assert _openai_compat._normalize_message_content("hola") == "hola"
 
-    # Debe usar mp3 como fallback
-    assert result["input_audio"]["format"] == "mp3"
+        content_list = [
+            {"type": "text", "text": "a"},
+            {"type": "video_url", "url": "https://x/v.mp4"},
+        ]
+        out_list = _openai_compat._normalize_message_content(content_list)
+        assert isinstance(out_list, list)
+        assert out_list[0] == {"type": "text", "text": "a"}
+        assert out_list[1] == {"type": "video_url", "video_url": {"url": "https://x/v.mp4"}}
 
+        class Obj:
+            def __init__(self) -> None:
+                self.x = 1
 
-def test_normalize_content_part_with_cache_control_variants():
-    """Test con variantes de cache_control (cacheControl, cachecontrol)"""
-    part1 = {
-        "type": "text",
-        "text": "Test",
-        "cacheControl": {"type": "ephemeral"}
-    }
-
-    result1 = _normalize_content_part(part1)
-    assert "cacheControl" in result1
-
-    part2 = {
-        "type": "text",
-        "text": "Test",
-        "cachecontrol": {"type": "ephemeral"}
-    }
-
-    result2 = _normalize_content_part(part2)
-    assert "cachecontrol" in result2
-
-
-def test_normalize_content_part_audio_without_input_audio():
-    """Test tipo audio con key 'audio' pero sin 'input_audio'"""
-    part = {
-        "type": "audio",
-        "audio": {
-            "data": "audiodata",
-            "format": "flac"
-        }
-    }
-
-    result = _normalize_content_part(part)
-
-    assert result["type"] == "input_audio"
-    assert result["input_audio"]["data"] == "audiodata"
+        out_other = _openai_compat._normalize_message_content(Obj())
+        assert out_other == {"x": 1}
 
 
-def test_normalize_content_part_without_type():
-    """Test part sin campo type"""
-    part = {
-        "some_field": "value",
-        "id": "remove_me"
-    }
+class Test__extract_text_from_parts:
+    def test_string_returns_itself(self) -> None:
+        assert _openai_compat._extract_text_from_parts("hola") == "hola"
 
-    result = _normalize_content_part(part)
+    def test_non_list_is_stringified(self) -> None:
+        assert _openai_compat._extract_text_from_parts(123) == "123"
 
-    # Debe remover id pero mantener el resto
-    assert "id" not in result
-    assert result["some_field"] == "value"
+    def test_extracts_text_and_content_fields(self) -> None:
+        parts = [
+            {"type": "text", "text": "uno"},
+            {"type": "whatever", "content": "dos"},
+            "tres",
+            {"type": "text", "text": ""},
+        ]
+        out = _openai_compat._extract_text_from_parts(parts)
+        assert out == "uno\ndos\ntres"
 
-
-def test_extract_text_from_parts_with_content_field():
-    """Test extracción de campo 'content' cuando no hay 'text'"""
-    content = [
-        {"type": "something", "content": "Text from content field"}
-    ]
-
-    result = _extract_text_from_parts(content)
-
-    assert "Text from content field" in result
-
-
-def test_extract_text_from_parts_with_empty_strings():
-    """Test que filtra strings vacíos"""
-    content = [
-        {"type": "text", "text": ""},
-        {"type": "text", "text": "Valid text"},
-        {"type": "text", "text": ""}
-    ]
-
-    result = _extract_text_from_parts(content)
-
-    # Solo debe incluir el texto válido
-    assert result == "Valid text"
+    def test_exclude_thinking_and_redacted_thinking(self) -> None:
+        parts = [
+            {"type": "thinking", "thinking": "no"},
+            {"type": "redacted_thinking", "data": "no"},
+            {"type": "text", "text": "sí"},
+        ]
+        out = _openai_compat._extract_text_from_parts(parts, exclude_thinking=True)
+        assert out == "sí"
 
 
-def test_lc_messages_to_openai_ai_message_with_invalid_tool_calls():
-    """Test AIMessage con invalid_tool_calls"""
-    with patch('langchain_pollinations._openai_compat.AIMessage', MockAIMessage):
-        msg = MockAIMessage(
-            "Response",
-            invalid_tool_calls=[{
-                "name": "invalid_tool",
-                "args": {"bad": "args"},
-                "id": "invalid_1"
-            }]
-        )
+class Test_lc_messages_to_openai:
+    def test_roles_and_tool_message_strictness(self) -> None:
+        msgs = [
+            SystemMessage(content="sistema"),
+            HumanMessage(content="usuario", name="bob"),
+            ToolMessage(content=[{"type": "text", "text": "resultado"}], tool_call_id="call_1"),
+        ]
+        out = _openai_compat.lc_messages_to_openai(msgs)
 
-        result = lc_messages_to_openai([msg])
+        assert out[0]["role"] == "system"
+        assert out[0]["content"] == "sistema"
 
-        assert "tool_calls" in result[0]
-        assert len(result[0]["tool_calls"]) == 1
+        assert out[1]["role"] == "user"
+        assert out[1]["content"] == "usuario"
+        assert out[1]["name"] == "bob"
 
+        # ToolMessage: content debe ser string y no debe incluir "name".
+        assert out[2]["role"] == "tool"
+        assert out[2]["content"] == "resultado"
+        assert out[2]["tool_call_id"] == "call_1"
+        assert "name" not in out[2]
 
-def test_lc_messages_to_openai_ai_message_with_raw_tool_calls():
-    """Test AIMessage con tool_calls en additional_kwargs"""
-    with patch('langchain_pollinations._openai_compat.AIMessage', MockAIMessage):
-        msg = MockAIMessage(
-            "Response",
+    def test_ai_message_tool_calls_and_additional_kwargs(self) -> None:
+        ai = AIMessage(
+            content="ok",
+            tool_calls=[{"name": "t1", "args": {"x": 1}, "id": "id1"}],
+            invalid_tool_calls=[{"name": "t2", "args": '{"y": 2}'}],
             additional_kwargs={
-                "tool_calls": [
-                    {"type": "function", "function": {"name": "raw_tool"}}
-                ]
-            }
+                "function_call": {"name": "legacy", "arguments": {"a": 1}},
+                "audio": {"transcript": "hola", "data": "xxx"},
+                "cache_control": {"type": "ephemeral"},
+            },
         )
+        out = _openai_compat.lc_messages_to_openai([ai])[0]
 
-        result = lc_messages_to_openai([msg])
+        assert out["role"] == "assistant"
+        assert out["content"] == "ok"
+        assert out["cache_control"] == {"type": "ephemeral"}
 
-        assert "tool_calls" in result[0]
+        assert "tool_calls" in out
+        assert len(out["tool_calls"]) == 2
+        assert out["tool_calls"][0]["type"] == "function"
+        assert out["tool_calls"][0]["function"]["name"] == "t1"
+        assert out["tool_calls"][0]["function"]["arguments"] == '{"x": 1}'
+        assert out["tool_calls"][0]["id"] == "id1"
 
+        assert out["tool_calls"][1]["function"]["name"] == "t2"
+        assert out["tool_calls"][1]["function"]["arguments"] == '{"y": 2}'
 
-def test_lc_messages_to_openai_ai_message_with_function_call():
-    """Test AIMessage con function_call en additional_kwargs"""
-    with patch('langchain_pollinations._openai_compat.AIMessage', MockAIMessage):
-        msg = MockAIMessage(
-            "Response",
-            additional_kwargs={
-                "function_call": {"name": "legacy_function", "arguments": "{}"}
-            }
+        assert out["function_call"] == {"name": "legacy", "arguments": {"a": 1}}
+        assert out["audio"] == {"transcript": "hola", "data": "xxx"}
+
+    def test_ai_message_uses_raw_tool_calls_when_no_tool_calls_lists(self) -> None:
+        ai = AIMessage(
+            content="ok",
+            additional_kwargs={"tool_calls": [{"type": "function", "function": {"name": "x", "arguments": "{}"}}]},
         )
+        out = _openai_compat.lc_messages_to_openai([ai])[0]
+        assert out["tool_calls"][0]["function"]["name"] == "x"
 
-        result = lc_messages_to_openai([msg])
+    def test_fallback_role_from_type_attribute_for_unknown_message_object(self) -> None:
+        class DummyMsg:
+            # No es instancia de SystemMessage/HumanMessage/ToolMessage/AIMessage.
+            type = "developer"
 
-        assert "function_call" in result[0]
-        assert result[0]["function_call"]["name"] == "legacy_function"
+            def __init__(self) -> None:
+                self.content = "hola"
+                self.additional_kwargs = {}
+
+        out = _openai_compat.lc_messages_to_openai([DummyMsg()])  # type: ignore[arg-type]
+        assert out[0]["role"] == "developer"
+        assert out[0]["content"] == "hola"
 
 
-def test_lc_messages_to_openai_ai_message_with_audio():
-    """Test AIMessage con audio en additional_kwargs"""
-    with patch('langchain_pollinations._openai_compat.AIMessage', MockAIMessage):
-        msg = MockAIMessage(
-            "Response",
-            additional_kwargs={
-                "audio": {"id": "audio_123", "transcript": "Hello"}
+class Test_tool_to_openai_tool:
+    @pytest.fixture()
+    def _restore_function_calling_module(self) -> Any:
+        # Fixture defensiva: guarda/restaura sys.modules para evitar fugas entre tests.
+        key = "langchain_core.utils.function_calling"
+        prev = sys.modules.get(key, None)
+        yield
+        if prev is None:
+            sys.modules.pop(key, None)
+        else:
+            sys.modules[key] = prev
+
+    def test_dict_passthrough(self) -> None:
+        tool = {"type": "function", "function": {"name": "x", "parameters": {"type": "object", "properties": {}}}}
+        out = _openai_compat.tool_to_openai_tool(tool)
+        assert out is tool
+
+    def test_uses_langchain_converter_when_schema_is_not_empty(self, _restore_function_calling_module: Any) -> None:
+        key = "langchain_core.utils.function_calling"
+        mod = types.ModuleType(key)
+
+        def convert_to_openai_tool(_: Any) -> dict[str, Any]:
+            return {
+                "type": "function",
+                "function": {"name": "t", "parameters": {"type": "object", "properties": {"a": {"type": "string"}}}},
             }
-        )
 
-        result = lc_messages_to_openai([msg])
+        mod.convert_to_openai_tool = convert_to_openai_tool  # type: ignore[attr-defined]
+        sys.modules[key] = mod
 
-        assert "audio" in result[0]
-        assert result[0]["audio"]["id"] == "audio_123"
+        class Dummy:
+            pass
+
+        out = _openai_compat.tool_to_openai_tool(Dummy())
+        assert out["type"] == "function"
+        assert out["function"]["name"] == "t"
+        assert "a" in out["function"]["parameters"]["properties"]
+
+    def test_converter_returning_flat_shape_is_wrapped(self, _restore_function_calling_module: Any) -> None:
+        key = "langchain_core.utils.function_calling"
+        mod = types.ModuleType(key)
+
+        def convert_to_openai_tool(_: Any) -> dict[str, Any]:
+            return {
+                "name": "t_flat",
+                "description": "desc",
+                "parameters": {"type": "object", "properties": {"a": {"type": "string"}}},
+            }
+
+        mod.convert_to_openai_tool = convert_to_openai_tool  # type: ignore[attr-defined]
+        sys.modules[key] = mod
+
+        class Dummy:
+            pass
+
+        out = _openai_compat.tool_to_openai_tool(Dummy())
+        assert out["type"] == "function"
+        assert out["function"]["name"] == "t_flat"
+        assert out["function"]["description"] == "desc"
+
+    def test_fallback_when_converter_import_fails(self, _restore_function_calling_module: Any) -> None:
+        # Forzamos el fallo del "from ... import convert_to_openai_tool"
+        # creando un módulo sin ese símbolo.
+        key = "langchain_core.utils.function_calling"
+        sys.modules[key] = types.ModuleType(key)
+
+        class ArgsSchema(BaseModel):
+            a: str = Field(default="x")
+
+        class DummyTool:
+            name = "dummy"
+            description = "una herramienta"
+            args_schema = ArgsSchema
+
+        out = _openai_compat.tool_to_openai_tool(DummyTool())
+        assert out["type"] == "function"
+        assert out["function"]["name"] == "dummy"
+        assert out["function"]["description"] == "una herramienta"
+        assert "properties" in out["function"]["parameters"]
+        assert "a" in out["function"]["parameters"]["properties"]
+
+    def test_fallback_uses_tool_call_schema_when_present(self, _restore_function_calling_module: Any) -> None:
+        key = "langchain_core.utils.function_calling"
+        sys.modules[key] = types.ModuleType(key)
+
+        class ToolCallSchema(BaseModel):
+            b: int
+
+        class DummyTool:
+            name = "dummy"
+            tool_call_schema = ToolCallSchema
+
+        out = _openai_compat.tool_to_openai_tool(DummyTool())
+        assert "b" in out["function"]["parameters"]["properties"]
+
+    def test_fallback_uses_get_input_schema_when_present(self, _restore_function_calling_module: Any) -> None:
+        key = "langchain_core.utils.function_calling"
+        sys.modules[key] = types.ModuleType(key)
+
+        class InputSchema(BaseModel):
+            c: str
+
+        class DummyTool:
+            name = "dummy"
+
+            def get_input_schema(self) -> type[BaseModel]:
+                return InputSchema
+
+        out = _openai_compat.tool_to_openai_tool(DummyTool())
+        assert "c" in out["function"]["parameters"]["properties"]
+
+    def test_pydantic_model_class_tool_is_supported(self, _restore_function_calling_module: Any) -> None:
+        key = "langchain_core.utils.function_calling"
+        sys.modules[key] = types.ModuleType(key)
+
+        class MyToolSchema(BaseModel):
+            """Doc de MyToolSchema."""
+            d: float
+
+        out = _openai_compat.tool_to_openai_tool(MyToolSchema)
+        assert out["function"]["name"] == "MyToolSchema"
+        assert "d" in out["function"]["parameters"]["properties"]
+
+    def test_typed_dict_via_type_adapter_is_supported(self, _restore_function_calling_module: Any) -> None:
+        key = "langchain_core.utils.function_calling"
+        sys.modules[key] = types.ModuleType(key)
+
+        class MyTyped(TypedDict):
+            e: int
+
+        out = _openai_compat.tool_to_openai_tool(MyTyped)
+        assert out["function"]["name"] == "MyTyped"
+        assert "e" in out["function"]["parameters"]["properties"]
 
 
-def test_lc_messages_to_openai_tool_message_with_multipart_content():
-    """Test ToolMessage con contenido multipart que debe convertirse a string"""
-    with patch('langchain_pollinations._openai_compat.ToolMessage', MockToolMessage):
-        msg = MockToolMessage(
-            content=[
-                {"type": "text", "text": "Result part 1"},
-                {"type": "text", "text": "Result part 2"}
+class Test__safe_json_loads:
+    def test_valid_json(self) -> None:
+        assert _openai_compat._safe_json_loads('{"a": 1}') == {"a": 1}
+
+    def test_invalid_json_returns_original_string(self) -> None:
+        s = "{not-json"
+        assert _openai_compat._safe_json_loads(s) == s
+
+
+class Test_tool_calls:
+    def test_lc_tool_call_arguments_json_serialization_failure(self) -> None:
+        """
+        Verifica que si 'args' no es serializable, se use '{}' como fallback.
+        Cubre la excepción en json.dumps dentro de _lc_tool_call_to_openai_tool_call.
+        """
+        # Un objeto que falla al ser serializado (set no es JSON serializable)
+        unserializable_args = {"param": {1, 2, 3}}
+
+        tc = {
+            "name": "test_tool",
+            "args": unserializable_args,
+            "id": "call_123"
+        }
+
+        out = _openai_compat._lc_tool_call_to_openai_tool_call(tc)
+
+        assert out["type"] == "function"
+        assert out["function"]["name"] == "test_tool"
+        assert out["function"]["arguments"] == "{}"  # Fallback activado
+
+
+class Test_to_jsonable:
+    def test_to_jsonable_model_dump_raises_exception(self) -> None:
+        """
+        Cubre el bloque except cuando model_dump() falla.
+        """
+        class BrokenModelDump:
+            def model_dump(self):
+                raise ValueError("Simulated model_dump failure")
+
+            def dict(self):
+                return {"fallback": "dict_method"}
+
+        obj = BrokenModelDump()
+        result = _openai_compat._to_jsonable(obj)
+        assert result == {"fallback": "dict_method"}
+
+    def test_to_jsonable_dict_raises_exception(self) -> None:
+        """
+        Cubre el bloque except cuando dict() falla (y no hay model_dump).
+        """
+        class BrokenDictMethod:
+            def dict(self):
+                raise ValueError("Simulated dict failure")
+            # No tiene model_dump, ni vars (si es builtin o slots sin dict)
+
+        obj = BrokenDictMethod()
+        # vars(obj) funciona si tiene __dict__, probemos un objeto simple primero
+        # Si vars() funciona, retornará vars.
+        obj.x = 1
+        result = _openai_compat._to_jsonable(obj)
+        assert result == {"x": 1}
+
+    def test_to_jsonable_vars_raises_exception(self) -> None:
+        """
+        Cubre el bloque except final cuando vars() falla.
+        Esto suele pasar con objetos nativos o con __slots__ sin __dict__.
+        """
+        class SlotsOnly:
+            __slots__ = ['x']
+            def __init__(self):
+                self.x = 1
+
+            # No tiene model_dump, ni dict()
+            # vars() fallará con TypeError porque no tiene __dict__
+
+        obj = SlotsOnly()
+        # Al fallar todo, debe devolver el objeto original
+        result = _openai_compat._to_jsonable(obj)
+        assert result is obj
+
+
+class Test_infer_audio_format_from_mime:
+    def test_infer_audio_format_fallback_suffix(self) -> None:
+        """
+        Cubre la lógica de fallback: split('/') y ver si el sufijo está en _ALLOWED_AUDIO_FORMATS.
+        """
+        # Caso 1: Sufijo permitido (ej: custom/mp3)
+        assert _openai_compat._infer_audio_format_from_mime("application/mp3") == "mp3"
+
+        # Caso 2: Sufijo NO permitido
+        assert _openai_compat._infer_audio_format_from_mime("audio/unknown-format") is None
+
+        # Caso 3: Sin barra
+        assert _openai_compat._infer_audio_format_from_mime("mp3") is None
+
+
+class Test__lc_messages_to_openai:
+    def test_lc_messages_to_openai_invalid_tool_calls_and_function_call(self) -> None:
+        """
+        Cubre el bucle de invalid_tool_calls y el manejo de function_call (legacy).
+        """
+        ai_msg = AIMessage(
+            content="",
+            # Lista válida vacía, pero invalid_tool_calls presente
+            invalid_tool_calls=[
+                {"name": "bad_tool", "args": "not-json", "id": "invalid_1", "error": "err"}
             ],
-            tool_call_id="call_123"
+            additional_kwargs={
+                "function_call": {"name": "legacy_fn", "arguments": "{}"}
+            }
         )
 
-        result = lc_messages_to_openai([msg])
+        out_list = _openai_compat.lc_messages_to_openai([ai_msg])
+        msg = out_list[0]
 
-        # El contenido debe ser un string
-        assert isinstance(result[0]["content"], str)
-        assert "Result part 1" in result[0]["content"]
+        # Verificar invalid_tool_calls procesados
+        assert "tool_calls" in msg
+        assert len(msg["tool_calls"]) == 1
+        assert msg["tool_calls"][0]["function"]["name"] == "bad_tool"
 
-
-def test_lc_messages_to_openai_message_without_name_attribute():
-    """Test mensaje sin atributo name"""
-    with patch('langchain_pollinations._openai_compat.HumanMessage', MockHumanMessage):
-        msg = MockHumanMessage("Hello")
-        delattr(msg, 'name')
-
-        result = lc_messages_to_openai([msg])
-
-        assert "name" not in result[0]
+        # Verificar function_call
+        assert "function_call" in msg
+        assert msg["function_call"]["name"] == "legacy_fn"
 
 
-def test_tool_to_openai_tool_with_lc_converter_returning_name_parameters():
-    """Test cuando el convertidor LC devuelve formato {name, parameters, description}"""
-    with patch('langchain_core.utils.function_calling.convert_to_openai_tool') as mock_convert:
-        mock_convert.return_value = {
-            "name": "converted_tool",
-            "description": "Converted by LC",
-            "parameters": {
+class Test__tool_to_openai_tool:
+    def test_tool_to_openai_tool_conversion_failures(self) -> None:
+        """
+        Fuerza fallos en cada estrategia de conversión para cubrir los bloques 'except: pass'.
+        Usamos mocks para simular que cada atributo existe pero falla al llamarse.
+        """
+
+        # Creamos un objeto que parece tener todos los métodos, pero todos fallan
+        class FailTool:
+            name = "fail_tool"
+            description = "tool that fails everywhere"
+
+            # 1. args_schema falla
+            class args_schema:
+                @staticmethod
+                def model_json_schema():
+                    raise ValueError("args_schema failed")
+
+            # 2. tool_call_schema falla
+            class tool_call_schema:
+                @staticmethod
+                def model_json_schema():
+                    raise ValueError("tool_call_schema failed")
+
+            # 3. get_input_schema falla
+            def get_input_schema(self):
+                raise ValueError("get_input_schema failed")
+
+        # Mockeamos convert_to_openai_tool de langchain para que falle también
+        with mock.patch("langchain_core.utils.function_calling.convert_to_openai_tool", side_effect=ValueError("convert failed")):
+            # Mockeamos pydantic.BaseModel y TypeAdapter para que no interfieran o fallen
+            # (Aunque en el código real, si no es subclase, simplemente pasa al siguiente)
+
+            # Ejecutar la conversión
+            result = _openai_compat.tool_to_openai_tool(FailTool())
+
+            # Debe haber pasado por todos los excepts y llegado al fallback final
+            # Fallback final: name, description, parameters={}
+            assert result["type"] == "function"
+            assert result["function"]["name"] == "fail_tool"
+            assert result["function"]["parameters"] == {
                 "type": "object",
-                "properties": {"param": {"type": "string"}}
+                "properties": {},
+                "additionalProperties": True
             }
-        }
 
-        tool = MagicMock()
+    def test_tool_to_openai_tool_get_input_schema_returns_bad_object(self) -> None:
+        """
+        Cubre el caso donde get_input_schema() retorna algo, pero ese algo falla en model_json_schema().
+        """
+        class BadSchemaObj:
+            def model_json_schema(self):
+                raise ValueError("Boom")
 
-        result = tool_to_openai_tool(tool)
+        class ToolWithBadSchema:
+            name = "tool_bad_schema"
+            def get_input_schema(self):
+                return BadSchemaObj()
+
+        with mock.patch("langchain_core.utils.function_calling.convert_to_openai_tool", side_effect=ValueError):
+            result = _openai_compat.tool_to_openai_tool(ToolWithBadSchema())
+
+        assert result["function"]["name"] == "tool_bad_schema"
+        assert result["function"]["parameters"]["properties"] == {}
+
+    def test_tool_to_openai_tool_pydantic_v1_v2_compat(self) -> None:
+        """
+        Si model_json_schema falla, el código aún puede inferir schema vía TypeAdapter (Pydantic v2).
+        Por eso NO debemos esperar properties vacío.
+        """
+        from unittest import mock
+        from pydantic import BaseModel
+
+        class BrokenPydanticTool(BaseModel):
+            x: int
+
+            @classmethod
+            def model_json_schema(cls, *args, **kwargs):
+                raise ValueError("Pydantic schema gen failed")
+
+        with mock.patch(
+            "langchain_core.utils.function_calling.convert_to_openai_tool",
+            side_effect=ValueError,
+        ):
+            result = _openai_compat.tool_to_openai_tool(BrokenPydanticTool)
 
         assert result["type"] == "function"
-        assert result["function"]["name"] == "converted_tool"
-        assert result["function"]["description"] == "Converted by LC"
+        assert result["function"]["name"] == "BrokenPydanticTool"
+        # Puede contener 'x' porque entra por TypeAdapter(...).json_schema()
+        assert "x" in result["function"]["parameters"].get("properties", {})
+
+    def test_tool_to_openai_tool_type_adapter_failure_falls_back_to_default_schema(self) -> None:
+        """
+        Fuerza el fallo de TypeAdapter(...).json_schema() para cubrir el bloque except y
+        verificar que queda el schema default (properties vacío).
+        """
+        from unittest import mock
+        from pydantic import BaseModel
+
+        class BrokenPydanticTool(BaseModel):
+            x: int
+
+            @classmethod
+            def model_json_schema(cls, *args, **kwargs):
+                raise ValueError("Force BaseModel branch to fail")
+
+        class _FailingTypeAdapter:
+            def __init__(self, *_a: Any, **_k: Any) -> None:
+                pass
+
+            def json_schema(self) -> dict[str, Any]:
+                raise ValueError("Force TypeAdapter.json_schema to fail")
+
+        with mock.patch(
+            "langchain_core.utils.function_calling.convert_to_openai_tool",
+            side_effect=ValueError,
+        ):
+            with mock.patch("pydantic.TypeAdapter", _FailingTypeAdapter):
+                result = _openai_compat.tool_to_openai_tool(BrokenPydanticTool)
+
+        assert result["type"] == "function"
+        assert result["function"]["name"] == "BrokenPydanticTool"
+        assert result["function"]["parameters"]["properties"] == {}
+        assert result["function"]["parameters"]["additionalProperties"] is True
 
 
-def test_tool_to_openai_tool_with_lc_converter_empty_schema():
-    """Test cuando LC converter devuelve schema vacío, debe continuar con fallback"""
-    with patch('langchain_core.utils.function_calling.convert_to_openai_tool') as mock_convert:
-        mock_convert.return_value = {
+@pytest.fixture()
+def _force_langchain_converter_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Evita que tool_to_openai_tool() retorne temprano por el convertidor de LangChain.
+
+    Forzamos a que convert_to_openai_tool devuelva un schema "vacío" para que el flujo
+    continúe hasta las secciones 2.4 y 2.5 (imports de pydantic).
+    """
+    try:
+        import langchain_core.utils.function_calling as _fc  # type: ignore
+    except Exception:
+        # Si no existe el módulo (raro en este proyecto), igual seguimos: el código ya
+        # tiene try/except alrededor de ese import.
+        return
+
+    def _empty_converter(_: Any) -> dict[str, Any]:
+        return {
             "type": "function",
             "function": {
-                "name": "empty_tool",
-                "parameters": {}
-            }
+                "name": "dummy",
+                "parameters": {"type": "object", "properties": {}},  # <- schema vacío
+            },
         }
 
-        tool = MagicMock()
-        tool.name = "fallback_name"
-        tool.args_schema = None
-
-        result = tool_to_openai_tool(tool)
-
-        # Debe intentar usar el fallback
-        assert result["type"] == "function"
-
-
-def test_tool_to_openai_tool_with_lc_converter_exception():
-    """Test cuando el convertidor LC lanza excepción"""
-    with patch('langchain_core.utils.function_calling.convert_to_openai_tool') as mock_convert:
-        mock_convert.side_effect = Exception("Conversion failed")
-
-        tool = MagicMock()
-        tool.name = "tool_name"
-        tool.description = "Tool description"
-        tool.args_schema = None
-
-        result = tool_to_openai_tool(tool)
-
-        # Debe usar el fallback
-        assert result["type"] == "function"
-        assert result["function"]["name"] == "tool_name"
-
-
-def test_tool_to_openai_tool_args_schema_exception():
-    """Test cuando args_schema.model_json_schema() lanza excepción"""
-    tool = MagicMock()
-    tool.name = "error_tool"
-    tool.args_schema = MagicMock()
-    tool.args_schema.model_json_schema.side_effect = Exception("Schema error")
-
-    result = tool_to_openai_tool(tool)
-
-    # Debe continuar con otros métodos de inferencia
-    assert result["type"] == "function"
-
-
-def test_tool_to_openai_tool_tool_call_schema_exception():
-    """Test cuando tool_call_schema lanza excepción"""
-    tool = MagicMock()
-    tool.name = "error_tool"
-    tool.args_schema = None
-    tool.tool_call_schema = MagicMock()
-    tool.tool_call_schema.model_json_schema.side_effect = Exception("Schema error")
-
-    result = tool_to_openai_tool(tool)
-
-    assert result["type"] == "function"
-
-
-def test_tool_to_openai_tool_get_input_schema_exception():
-    """Test cuando get_input_schema() lanza excepción"""
-    tool = MagicMock()
-    tool.name = "error_tool"
-    tool.args_schema = None
-    tool.tool_call_schema = None
-    tool.get_input_schema.side_effect = Exception("Input schema error")
-
-    result = tool_to_openai_tool(tool)
-
-    assert result["type"] == "function"
-
-
-def test_tool_to_openai_tool_pydantic_not_installed():
-    """Test cuando Pydantic no está disponible"""
-    with patch.dict('sys.modules', {'pydantic': None}):
-        tool = MagicMock()
-        tool.name = "no_pydantic_tool"
-        tool.args_schema = None
-
-        result = tool_to_openai_tool(tool)
-
-        assert result["type"] == "function"
-
-
-def test_tool_to_openai_tool_typeadapter_not_available():
-    """Test cuando TypeAdapter no está disponible en Pydantic"""
-    tool = MagicMock()
-    tool.name = "no_adapter_tool"
-    tool.args_schema = None
-    tool.tool_call_schema = None
-    tool.get_input_schema = MagicMock(side_effect=Exception("No schema"))
-
-    with patch('pydantic.TypeAdapter', None):
-        result = tool_to_openai_tool(tool)
-
-        assert result["type"] == "function"
-
-
-def test_tool_to_openai_tool_typeadapter_exception():
-    """Test cuando TypeAdapter lanza excepción"""
-    tool = MagicMock()
-    tool.name = "adapter_error_tool"
-    tool.args_schema = None
-    tool.tool_call_schema = None
-    tool.get_input_schema = MagicMock(side_effect=Exception("No schema"))
-
-    with patch('pydantic.TypeAdapter') as mock_adapter:
-        mock_adapter.side_effect = Exception("TypeAdapter failed")
-
-        result = tool_to_openai_tool(tool)
-
-        assert result["type"] == "function"
-
-
-def test_tool_to_openai_tool_without_description():
-    """Test tool sin description ni __doc__"""
-    tool = MagicMock()
-    tool.name = "no_desc_tool"
-    tool.description = None
-    tool.__doc__ = None
-    tool.args_schema = None
-
-    result = tool_to_openai_tool(tool)
-
-    # No debe tener campo description
-    assert "description" not in result["function"]
-
-
-def test_tool_to_openai_tool_with_empty_docstring():
-    """Test tool con __doc__ vacío o solo espacios"""
-    tool = MagicMock()
-    tool.name = "empty_doc_tool"
-    tool.description = None
-    tool.__doc__ = "   \n  "
-    tool.args_schema = None
-
-    result = tool_to_openai_tool(tool)
-
-    assert "description" not in result["function"]
-
-
-def test_tool_to_openai_tool_without_name():
-    """Test tool sin name ni __name__"""
-    tool = MagicMock()
-    delattr(tool, 'name')
-    delattr(tool, '__name__')
-    tool.description = None
-    tool.args_schema = None
-
-    result = tool_to_openai_tool(tool)
-
-    # Debe usar "Tool" como nombre por defecto
-    assert result["function"]["name"] == "Tool"
-
-
-def test_tool_to_openai_tool_with_schema_with_oneof():
-    """Test schema que tiene oneOf no se considera vacío"""
-    tool = MagicMock()
-    tool.name = "oneof_tool"
-
-    schema_mock = MagicMock()
-    schema_mock.model_json_schema.return_value = {
-        "oneOf": [
-            {"type": "string"},
-            {"type": "number"}
-        ]
-    }
-    tool.args_schema = schema_mock
-
-    result = tool_to_openai_tool(tool)
-
-    assert "oneOf" in result["function"]["parameters"]
-
-
-def test_tool_to_openai_tool_with_schema_with_required():
-    """Test schema con required no vacío no se considera vacío"""
-    tool = MagicMock()
-    tool.name = "required_tool"
-
-    schema_mock = MagicMock()
-    schema_mock.model_json_schema.return_value = {
-        "type": "object",
-        "properties": {},
-        "required": ["field1"]
-    }
-    tool.args_schema = schema_mock
-
-    result = tool_to_openai_tool(tool)
-
-    assert "required" in result["function"]["parameters"]
-
-
-def test_normalize_input_audio_part_all_fields_cleanup():
-    """Test que se eliminan todos los campos extra"""
-    part = {
-        "type": "input_audio",
-        "input_audio": {
-            "data": "audiodata",
-            "format": "mp3"
-        },
-        "base64": "should_be_removed",
-        "mime_type": "should_be_removed",
-        "id": "should_be_removed",
-        "audio": "should_be_removed",
-        "data": "should_be_removed",
-        "format": "should_be_removed"
-    }
-
-    result = _normalize_input_audio_part(part)
-
-    assert "base64" not in result
-    assert "mime_type" not in result
-    assert "id" not in result
-    assert "audio" not in result
-    # data y format solo deben estar en input_audio
-    assert "data" not in result
-    assert "format" not in result
-    assert result["input_audio"]["data"] == "audiodata"
-
-
-def test_lc_messages_to_openai_with_empty_name():
-    """Test mensaje con name vacío no debe incluirse"""
-    with patch('langchain_pollinations._openai_compat.HumanMessage', MockHumanMessage):
-        msg = MockHumanMessage("Hello", name="")
-
-        result = lc_messages_to_openai([msg])
-
-        assert "name" not in result[0]
-
-
-def test_lc_messages_to_openai_ai_message_both_tool_calls_and_raw():
-    """Test AIMessage con tool_calls y raw tool_calls en additional_kwargs"""
-    with patch('langchain_pollinations._openai_compat.AIMessage', MockAIMessage):
-        msg = MockAIMessage(
-            "Response",
-            tool_calls=[{
-                "name": "tool1",
-                "args": {},
-                "id": "call_1"
-            }],
-            additional_kwargs={
-                "tool_calls": [
-                    {"type": "function", "function": {"name": "raw_tool"}}
-                ]
-            }
+    monkeypatch.setattr(_fc, "convert_to_openai_tool", _empty_converter, raising=True)
+
+
+def _make_import_blocker(
+    *,
+    block_pydantic_basemodel: bool,
+    block_pydantic_typeadapter: bool,
+) -> Callable[..., Any]:
+    """
+    Crea un __import__ que falla solo para 'from pydantic import BaseModel/TypeAdapter'.
+    """
+
+    _orig_import = builtins.__import__
+
+    def _custom_import(
+        name: str,
+        globals: Any = None,
+        locals: Any = None,
+        fromlist: tuple[str, ...] | list[str] = (),
+        level: int = 0,
+    ) -> Any:
+        if name == "pydantic":
+            fl = set(fromlist or ())
+            if block_pydantic_basemodel and "BaseModel" in fl:
+                raise ImportError("Blocked pydantic.BaseModel import for coverage")
+            if block_pydantic_typeadapter and "TypeAdapter" in fl:
+                raise ImportError("Blocked pydantic.TypeAdapter import for coverage")
+
+        return _orig_import(name, globals, locals, fromlist, level)
+
+    return _custom_import
+
+
+class Test_tool_to_openai_tool_import_failures:
+    def test_pydantic_import_basemodel_fails_executes_except(self, monkeypatch: pytest.MonkeyPatch, _force_langchain_converter_empty: None) -> None:
+        """
+        Cubre:
+            except Exception:
+                BaseModel = None  # type: ignore
+        """
+        # Usamos un "tool" que no aporte schema por otras vías (sin args_schema, etc.)
+        tool = object()
+
+        monkeypatch.setattr(
+            builtins,
+            "__import__",
+            _make_import_blocker(
+                block_pydantic_basemodel=True,
+                block_pydantic_typeadapter=False,
+            ),
+            raising=True,
         )
 
-        result = lc_messages_to_openai([msg])
+        out = _openai_compat.tool_to_openai_tool(tool)
 
-        # Debe priorizar los tool_calls del mensaje sobre los de additional_kwargs
-        assert "tool_calls" in result[0]
-        assert result[0]["tool_calls"][0]["function"]["name"] == "tool1"
+        # Validación mínima: debe retornar un tool OpenAI-compatible, sin crashear.
+        assert out["type"] == "function"
+        assert "function" in out
+        assert out["function"]["name"] == "Tool"
+        assert "parameters" in out["function"]
+
+    def test_pydantic_import_typeadapter_fails_executes_except(self, monkeypatch: pytest.MonkeyPatch, _force_langchain_converter_empty: None) -> None:
+        """
+        Cubre:
+            except Exception:
+                TypeAdapter = None  # type: ignore
+        """
+        tool = object()
+
+        monkeypatch.setattr(
+            builtins,
+            "__import__",
+            _make_import_blocker(
+                block_pydantic_basemodel=False,
+                block_pydantic_typeadapter=True,
+            ),
+            raising=True,
+        )
+
+        out = _openai_compat.tool_to_openai_tool(tool)
+
+        # Validación mínima: debe construir el wrapper final y no depender de TypeAdapter.
+        assert out["type"] == "function"
+        assert out["function"]["name"] == "Tool"
+        assert out["function"]["parameters"]["type"] == "object"
+        # Como no hay inferencia de schema, nos quedamos con el default vacío.
+        assert out["function"]["parameters"]["properties"] == {}
+        assert out["function"]["parameters"]["additionalProperties"] is True
+
+    def test_pydantic_imports_basemodel_and_typeadapter_both_fail(self, monkeypatch: pytest.MonkeyPatch, _force_langchain_converter_empty: None) -> None:
+        """
+        Test adicional (útil para robustez): ambos imports fallan y aun así el
+        fallback final debe funcionar.
+        """
+        tool = object()
+
+        monkeypatch.setattr(
+            builtins,
+            "__import__",
+            _make_import_blocker(
+                block_pydantic_basemodel=True,
+                block_pydantic_typeadapter=True,
+            ),
+            raising=True,
+        )
+
+        out = _openai_compat.tool_to_openai_tool(tool)
+
+        assert out["type"] == "function"
+        assert out["function"]["name"] == "Tool"
+        assert out["function"]["parameters"]["properties"] == {}
