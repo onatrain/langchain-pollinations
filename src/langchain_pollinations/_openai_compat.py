@@ -10,7 +10,7 @@ from typing import Any, Literal, TypedDict, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
-# API allowed formats for input_audio.format
+# Formatos de audio permitidos en input_audio.format
 _ALLOWED_AUDIO_FORMATS = {"wav", "mp3", "flac", "opus", "pcm16"}
 
 
@@ -43,7 +43,57 @@ class ContentBlockImageUrl(TypedDict):
     """
 
     type: Literal["image_url"]
-    image_url: dict[str, Any]  # {url: str, detail?: str, mime_type?: str}
+    image_url: dict[str, Any]  # {url: str, detail?: "auto"|"low"|"high", mime_type?: str}
+
+
+class ContentBlockVideoUrl(TypedDict):
+    """
+    Content block for video URL inputs in multimodal messages.
+
+    Used to pass a video to models that support video understanding. The inner
+    ``video_url`` object requires a ``url`` field and accepts an optional
+    ``mime_type`` string for format disambiguation.
+
+    Example::
+
+        {
+            "type": "video_url",
+            "video_url": {"url": "https://example.com/clip.mp4", "mime_type": "video/mp4"}
+        }
+    """
+
+    type: Literal["video_url"]
+    video_url: dict[str, Any]  # {url: str, mime_type?: str}
+
+
+class ContentBlockFile(TypedDict, total=False):
+    """
+    Content block for attaching file content to a message.
+
+    Supports four mutually complementary identity strategies: inline base64
+    data (``file_data``), a pre-uploaded file reference (``file_id``), a remote
+    URL (``file_url``), and a display name (``file_name``). An optional
+    ``mime_type`` field helps the backend interpret the content correctly.
+    ``cache_control`` is also accepted per the API spec.
+
+    At least one of ``file_data``, ``file_id``, or ``file_url`` should be
+    provided for the request to be meaningful, though enforcement is left to
+    the backend.
+
+    Example::
+
+        {
+            "type": "file",
+            "file": {
+                "file_url": "https://example.com/report.pdf",
+                "mime_type": "application/pdf"
+            }
+        }
+    """
+
+    type: Literal["file"]
+    file: dict[str, Any]  # {file_data?, file_id?, file_name?, file_url?, mime_type?}
+    cache_control: dict[str, Any]  # {type: "ephemeral"} — opcional
 
 
 class ContentBlockThinking(TypedDict):
@@ -69,6 +119,8 @@ class ContentBlockRedactedThinking(TypedDict):
 ContentBlock = (
     ContentBlockText
     | ContentBlockImageUrl
+    | ContentBlockVideoUrl
+    | ContentBlockFile
     | ContentBlockThinking
     | ContentBlockRedactedThinking
     | dict[str, Any]
@@ -233,7 +285,7 @@ def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
         part: A dictionary representing an audio message part in various possible formats.
 
     Returns:
-        A normalized dictionary with specific "type" and "input_audio" keys.
+        A normalized dictionary with specific ``type`` and ``input_audio`` keys.
     """
     data: str | None = None
     fmt: str | None = None
@@ -252,7 +304,7 @@ def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
             out = dict(part)
             out["type"] = "input_audio"
             out["input_audio"] = {"data": data, "format": fmt}
-            # Limpieza de posibles campos extra que confunden
+            # Limpieza de posibles campos extra que confunden al gateway
             out.pop("base64", None)
             out.pop("mime_type", None)
             out.pop("id", None)
@@ -286,7 +338,7 @@ def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
             fmt = _infer_audio_format_from_mime(cast(str, audio_obj.get("mime_type")))
 
     if not (isinstance(data, str) and data):
-        # Deja que el backend dé un error más claro, pero ya con la estructura esperada.
+        # Dejar que el backend dé un error más claro, pero ya con la estructura esperada.
         data = ""
 
     if not (isinstance(fmt, str) and fmt in _ALLOWED_AUDIO_FORMATS):
@@ -308,12 +360,132 @@ def _normalize_input_audio_part(part: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _normalize_video_url_part(part: dict[str, Any]) -> dict[str, Any]:
+    """
+    Ensure a video URL content part follows the expected API structure.
+
+    Accepts both the canonical nested form and a flat variant where ``url``
+    appears directly on the part dictionary instead of inside a ``video_url``
+    sub-object. When a valid ``url`` cannot be found, the part is returned with
+    its type corrected but otherwise unmodified, allowing the backend to produce
+    a descriptive error.
+
+    Canonical form::
+
+        {"type": "video_url", "video_url": {"url": "https://...", "mime_type": "video/mp4"}}
+
+    Flat variant (normalized to canonical)::
+
+        {"type": "video_url", "url": "https://...", "mime_type": "video/mp4"}
+
+    Args:
+        part: A dictionary representing a video URL content part in any supported
+            input format.
+
+    Returns:
+        A normalized dictionary conforming to the ``video_url`` schema expected
+        by the API.
+    """
+    url: str | None = None
+    mime_type: str | None = None
+
+    # 1) Forma canónica: video_url es un sub-dict con url dentro.
+    vu = part.get("video_url")
+    if isinstance(vu, dict):
+        if isinstance(vu.get("url"), str) and vu["url"]:
+            url = vu["url"]
+        if isinstance(vu.get("mime_type"), str) and vu["mime_type"]:
+            mime_type = vu["mime_type"]
+
+    # 2) Variante plana: url en la raíz del part (e.g. de SDKs externos).
+    if url is None and isinstance(part.get("url"), str) and part["url"]:
+        url = part["url"]
+    if mime_type is None and isinstance(part.get("mime_type"), str) and part["mime_type"]:
+        mime_type = part["mime_type"]
+
+    # Sin URL válida: devolver con type correcto para que el backend informe el error.
+    if not (isinstance(url, str) and url):
+        return {**part, "type": "video_url"}
+
+    inner: dict[str, Any] = {"url": url}
+    if mime_type:
+        inner["mime_type"] = mime_type
+
+    return {"type": "video_url", "video_url": inner}
+
+
+def _normalize_file_part(part: dict[str, Any]) -> dict[str, Any]:
+    """
+    Ensure a file content part follows the expected API structure.
+
+    Accepts both the canonical nested form (fields inside a ``file`` sub-object)
+    and a flat variant where ``file_data``, ``file_id``, ``file_name``,
+    ``file_url``, or ``mime_type`` appear directly on the part dictionary.
+    An optional ``cache_control`` key on the outer part is preserved.
+
+    At least one of ``file_data``, ``file_id``, or ``file_url`` should be
+    present for the request to be semantically valid; enforcement is left to
+    the backend.
+
+    Canonical form::
+
+        {
+            "type": "file",
+            "file": {"file_url": "https://example.com/doc.pdf", "mime_type": "application/pdf"}
+        }
+
+    Flat variant (normalized to canonical)::
+
+        {"type": "file", "file_url": "https://example.com/doc.pdf", "mime_type": "application/pdf"}
+
+    Args:
+        part: A dictionary representing a file content part in any supported
+            input format.
+
+    Returns:
+        A normalized dictionary conforming to the ``file`` schema expected
+        by the API, including ``cache_control`` when present on the input.
+    """
+    inner: dict[str, Any] = {}
+
+    # 1) Forma canónica: file es un sub-dict.
+    file_obj = part.get("file")
+    if isinstance(file_obj, dict):
+        for k in ("file_data", "file_id", "file_name", "file_url", "mime_type"):
+            v = file_obj.get(k)
+            # Solo copiar strings no vacíos; None y "" se omiten.
+            if isinstance(v, str) and v:
+                inner[k] = v
+
+    # 2) Variante plana: campos directamente en el part.
+    # No sobreescribe lo que ya extrajimos de file_obj.
+    for k in ("file_data", "file_id", "file_name", "file_url", "mime_type"):
+        if k not in inner:
+            v = part.get(k)
+            if isinstance(v, str) and v:
+                inner[k] = v
+
+    out: dict[str, Any] = {"type": "file", "file": inner}
+
+    # cache_control se preserva si viene en el part externo (permitido por el spec).
+    if "cache_control" in part:
+        out["cache_control"] = part["cache_control"]
+
+    return out
+
+
 def _normalize_content_part(part: Any) -> Any:
     """
     Normalize a single message content part into a format suitable for the API.
 
+    Dispatches to a type-specific normalizer for ``text``, ``input_audio``,
+    ``audio``, ``video_url``, and ``file`` parts. All other types (e.g.
+    ``image_url``) are returned as-is after stripping the ``id`` field, which
+    the API does not accept inside a ``MessageContentPart``.
+
     Args:
-        part: The content part to normalize, which can be a string, dict, or object.
+        part: The content part to normalize, which can be a string, dict, or
+            any object that ``_to_jsonable`` can convert to a dict.
 
     Returns:
         A dictionary representing the normalized content part with standard keys.
@@ -331,9 +503,8 @@ def _normalize_content_part(part: Any) -> Any:
     if not isinstance(t, str):
         return part
 
-    # Limpieza específica por tipo
     if t == "text":
-        # dejar solo lo que el schema espera
+        # Dejar solo lo que el schema espera; preservar variantes de cache_control.
         out = {"type": "text", "text": part.get("text", "")}
         if "cache_control" in part:
             out["cache_control"] = part["cache_control"]
@@ -353,11 +524,17 @@ def _normalize_content_part(part: Any) -> Any:
             p2["input_audio"] = p2.get("audio")
         return _normalize_input_audio_part(p2)
 
-    # base64/mime_type sin input_audio
     if t == "input_audio":
         return _normalize_input_audio_part(part)
 
-    # Otros tipos (image_url / video_url / file) se dejan pasar, pero ya sin `id`
+    if t == "video_url":
+        return _normalize_video_url_part(part)
+
+    if t == "file":
+        return _normalize_file_part(part)
+
+    # Otros tipos (image_url, etc.) se dejan pasar sin normalización extra;
+    # el `id` ya fue eliminado arriba.
     return part
 
 
@@ -499,7 +676,7 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
         tool: A tool definition (BaseTool, Pydantic model, TypedDict, or dict).
 
     Returns:
-        A dictionary containing the "type" and "function" definition for the tool.
+        A dictionary containing the ``type`` and ``function`` definition for the tool.
     """
 
     def _is_schema_empty(params: Any) -> bool:
@@ -537,7 +714,7 @@ def tool_to_openai_tool(tool: Any) -> dict[str, Any]:
             parameters: The JSON schema defining the function's arguments.
 
         Returns:
-            A dictionary formatted as a tool with type "function".
+            A dictionary formatted as a tool with type ``"function"``.
         """
         fn: dict[str, Any] = {"name": name, "parameters": parameters}
         if isinstance(description, str) and description.strip():
