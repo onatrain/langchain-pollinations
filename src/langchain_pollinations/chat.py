@@ -36,12 +36,16 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, fie
 
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
-from langchain_pollinations._openai_compat import lc_messages_to_openai, tool_to_openai_tool
+from langchain_pollinations._openai_compat import (
+    ChatCompletionResponse,
+    UserTier,
+    lc_messages_to_openai,
+    tool_to_openai_tool,
+)
 
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 DEFAULT_BASE_URL = "https://gen.pollinations.ai"
 INT53_MAX = 9007199254740991
-
 
 # Alias para mantener compatibilidad de anotaciones mientras el catálogo se gestiona dinámicamente.
 TextModelId = str
@@ -83,6 +87,7 @@ _text_model_ids_cache: list[str] = list(_FALLBACK_TEXT_MODEL_IDS)
 # a lo sumo una vez por proceso.
 _text_model_ids_lock: threading.Lock = threading.Lock()
 _text_model_ids_loaded: bool = False
+
 
 def _load_text_model_ids(
     api_key: str | None = None,
@@ -1178,12 +1183,14 @@ class ChatPollinations(BaseChatModel):
 
         return payload
 
-    def _parse_chat_result(self, data: dict[str, Any]) -> ChatResult:
+    def _parse_chat_result(self, data: ChatCompletionResponse) -> ChatResult:
         """
         Convert a successful API response into a LangChain ChatResult.
 
         Args:
-            data: The JSON dictionary from the API response.
+            data: The JSON dictionary from the API response, conforming to
+                ``ChatCompletionResponse``. The ``user_tier`` and ``citations``
+                fields are extracted and forwarded via ``response_metadata``.
 
         Returns:
             A ChatResult object containing generations and metadata.
@@ -1336,6 +1343,11 @@ class ChatPollinations(BaseChatModel):
         pending_usage_response_md: dict[str, Any] | None = None
         emitted_final_usage = False
 
+        # Acumulador de response_metadata a nivel de stream.
+        # Se fusiona con cada evento SSE, independientemente de si trae choices,
+        # para que citations y user_tier no se pierdan en eventos sin choices.
+        _stream_response_md: dict[str, Any] = {}
+
         def emit_final_usage_once() -> Iterator[ChatGenerationChunk]:
             """
             Create and yield a final chunk containing token usage metadata.
@@ -1362,14 +1374,19 @@ class ChatPollinations(BaseChatModel):
                 if evt.get("__done__") is True:
                     break
 
+                # Fusionar metadata de TODOS los eventos en el acumulador,
+                # antes de cualquier `continue`, para capturar citations/user_tier
+                # incluso en eventos que no llevan choices.
+                _stream_response_md.update(_response_metadata_from_response(evt))
+
                 # Monitorear el uso más reciente, pero sin adjuntarlo a chunks normales (evitar el conteo doble).
                 if "usage" in evt and evt.get("usage") is not None:
                     usage_md = _usage_metadata_from_usage(evt.get("usage"))
                     if usage_md is not None:
                         pending_usage_md = usage_md
-                        pending_usage_response_md = _response_metadata_from_response(evt)
+                        # Usar el acumulador completo como metadata del chunk de uso final.
+                        pending_usage_response_md = dict(_stream_response_md)
 
-                response_metadata = _response_metadata_from_response(evt)
                 choices = evt.get("choices") or []
 
                 if not isinstance(choices, list) or not choices:
@@ -1391,7 +1408,7 @@ class ChatPollinations(BaseChatModel):
 
                 additional_kwargs: dict[str, Any] = {}
 
-                # CORRECCIÓN: Usar content_blocks consistentemente (no content_parts)
+                # FIX: Usar content_blocks consistentemente (no content_parts)
                 # Preservar contenido estructurado para consumidores multimodales sin interrumpir el stream.
                 if self.preserve_multimodal_deltas and isinstance(delta_content, list):
                     additional_kwargs["content_blocks"] = delta_content
@@ -1411,7 +1428,8 @@ class ChatPollinations(BaseChatModel):
                     content=text,
                     additional_kwargs=additional_kwargs,
                     tool_call_chunks=tool_call_chunks,
-                    response_metadata=response_metadata,
+                    # MODIFICADO: snapshot del acumulador en lugar del metadata del evento puntual.
+                    response_metadata=dict(_stream_response_md),
                     usage_metadata=None,  # importante: evitar suma repetida de uso durante la agregación de chunks
                 )
 
@@ -1465,6 +1483,11 @@ class ChatPollinations(BaseChatModel):
         pending_usage_response_md: dict[str, Any] | None = None
         emitted_final_usage = False
 
+        # Acumulador de response_metadata a nivel de stream.
+        # Misma lógica que en _stream: garantiza que citations y user_tier
+        # lleguen al caller aunque provengan de eventos sin choices.
+        _stream_response_md: dict[str, Any] = {}
+
         async def emit_final_usage_once() -> AsyncIterator[ChatGenerationChunk]:
             """
             Create and yield a final chunk containing token usage metadata asynchronously.
@@ -1486,16 +1509,20 @@ class ChatPollinations(BaseChatModel):
         async with self._http.astream_post_json(CHAT_COMPLETIONS_PATH, payload) as r:
             self._http.raise_for_status(r)
             async for evt in _iter_sse_json_events_async(r):
-                if evt.get("__done__") is True:
+                if evt.get("__done__"):
                     break
+
+                # Fusionar metadata de TODOS los eventos en el acumulador,
+                # antes de cualquier `continue`.
+                _stream_response_md.update(_response_metadata_from_response(evt))
 
                 if "usage" in evt and evt.get("usage") is not None:
                     usage_md = _usage_metadata_from_usage(evt.get("usage"))
                     if usage_md is not None:
                         pending_usage_md = usage_md
-                        pending_usage_response_md = _response_metadata_from_response(evt)
+                        # MODIFICADO: usar el acumulador completo.
+                        pending_usage_response_md = dict(_stream_response_md)
 
-                response_metadata = _response_metadata_from_response(evt)
                 choices = evt.get("choices") or []
 
                 if not isinstance(choices, list) or not choices:
@@ -1533,7 +1560,8 @@ class ChatPollinations(BaseChatModel):
                     content=text,
                     additional_kwargs=additional_kwargs,
                     tool_call_chunks=tool_call_chunks,
-                    response_metadata=response_metadata,
+                    # MODIFICADO: snapshot del acumulador.
+                    response_metadata=dict(_stream_response_md),
                     usage_metadata=None,
                 )
 
