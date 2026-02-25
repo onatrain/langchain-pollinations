@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 import builtins
+import typing
 from typing import Any, TypedDict, Callable
 from unittest import mock
 
@@ -921,3 +922,206 @@ class Test_tool_to_openai_tool_import_failures:
         assert out["type"] == "function"
         assert out["function"]["name"] == "Tool"
         assert out["function"]["parameters"]["properties"] == {}
+
+
+class Test_UserTier:
+
+    def test_is_accessible_at_module_level(self) -> None:
+        # UserTier debe estar exportado en el módulo para que chat.py y código
+        # externo puedan importarlo directamente.
+        assert hasattr(_openai_compat, "UserTier")
+
+    def test_has_all_five_tier_values(self) -> None:
+        # Verifica que los cinco valores del enum del API estén presentes.
+        valores = typing.get_args(_openai_compat.UserTier)
+        assert set(valores) == {"anonymous", "spore", "seed", "flower", "nectar"}
+
+    def test_has_exactly_five_values(self) -> None:
+        # No debe haber más ni menos valores que los cinco documentados en el API.
+        assert len(typing.get_args(_openai_compat.UserTier)) == 5
+
+    @pytest.mark.parametrize("tier", ["anonymous", "spore", "seed", "flower", "nectar"])
+    def test_each_tier_value_is_a_string(self, tier: str) -> None:
+        # Cada valor del Literal debe ser un str (nunca int ni None).
+        valores = typing.get_args(_openai_compat.UserTier)
+        assert tier in valores
+        assert isinstance(tier, str)
+
+
+class Test__ChatCompletionResponseRequired:
+
+    def test_all_five_base_fields_are_required(self) -> None:
+        # Los cinco campos que el API siempre devuelve deben marcarse como requeridos.
+        required = _openai_compat._ChatCompletionResponseRequired.__required_keys__
+        assert {"id", "object", "created", "model", "choices"} <= required
+
+    def test_no_optional_keys_in_base(self) -> None:
+        # La clase base usa total=True (por defecto); ningún campo debe ser opcional.
+        optional = _openai_compat._ChatCompletionResponseRequired.__optional_keys__
+        assert len(optional) == 0
+
+    def test_annotations_include_id_model_choices(self) -> None:
+        # Las anotaciones de la clase base deben incluir los tres campos más críticos.
+        hints = typing.get_type_hints(_openai_compat._ChatCompletionResponseRequired)
+        assert "id" in hints
+        assert "model" in hints
+        assert "choices" in hints
+
+    def test_choices_annotation_is_list(self) -> None:
+        # choices debe anotarse como alguna variante de list, no como str ni dict plano.
+        hints = typing.get_type_hints(_openai_compat._ChatCompletionResponseRequired)
+        choices_type = hints["choices"]
+        assert typing.get_origin(choices_type) is list
+
+    def test_created_annotation_is_int(self) -> None:
+        # created es un Unix timestamp entero, no string ni float.
+        hints = typing.get_type_hints(_openai_compat._ChatCompletionResponseRequired)
+        assert hints["created"] is int
+
+
+class Test_ChatCompletionResponse:
+
+    def test_is_accessible_at_module_level(self) -> None:
+        # ChatCompletionResponse lo importa chat.py; debe ser público en el módulo.
+        assert hasattr(_openai_compat, "ChatCompletionResponse")
+
+    def test_inherits_required_fields_from_base(self) -> None:
+        # Los campos de _ChatCompletionResponseRequired deben aparecer como requeridos
+        # también en el TypedDict derivado.
+        required = _openai_compat.ChatCompletionResponse.__required_keys__
+        assert {"id", "object", "created", "model", "choices"} <= required
+
+    def test_user_tier_is_optional(self) -> None:
+        # user_tier es el primer campo nuevo y debe ser opcional.
+        optional = _openai_compat.ChatCompletionResponse.__optional_keys__
+        assert "user_tier" in optional
+
+    def test_citations_is_optional(self) -> None:
+        # citations es el segundo campo nuevo y debe ser opcional.
+        optional = _openai_compat.ChatCompletionResponse.__optional_keys__
+        assert "citations" in optional
+
+    def test_both_fields_are_optional_simultaneously(self) -> None:
+        # Verificación conjunta: ambos campos nuevos deben ser opcionales.
+        optional = _openai_compat.ChatCompletionResponse.__optional_keys__
+        assert {"user_tier", "citations"} <= optional
+
+    def test_pre_existing_optional_fields_remain(self) -> None:
+        # Los campos opcionales anteriores no deben haberse perdido al agregar los nuevos.
+        optional = _openai_compat.ChatCompletionResponse.__optional_keys__
+        assert {"system_fingerprint", "usage", "prompt_filter_results"} <= optional
+
+    def test_required_and_optional_keys_are_disjoint(self) -> None:
+        # Un campo no puede ser al mismo tiempo requerido y opcional.
+        required = _openai_compat.ChatCompletionResponse.__required_keys__
+        optional = _openai_compat.ChatCompletionResponse.__optional_keys__
+        assert required.isdisjoint(optional)
+
+    def test_minimal_dict_with_only_required_fields_is_valid(self) -> None:
+        # Un dict con solo los cinco campos requeridos debe construirse sin errores
+        # y ser indexable como ChatCompletionResponse.
+        minimal: _openai_compat.ChatCompletionResponse = {
+            "id": "chatcmpl-abc123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "openai",
+            "choices": [],
+        }
+        assert minimal["id"] == "chatcmpl-abc123"
+        assert minimal["model"] == "openai"
+        assert minimal["choices"] == []
+
+    def test_dict_with_user_tier_set(self) -> None:
+        # Un response con user_tier presente debe poder construirse y leerse
+        # sin ningún tratamiento especial.
+        data: _openai_compat.ChatCompletionResponse = {
+            "id": "chatcmpl-tier",
+            "object": "chat.completion",
+            "created": 1700000001,
+            "model": "gemini",
+            "choices": [],
+            "user_tier": "flower",
+        }
+        assert data["user_tier"] == "flower"
+
+    def test_dict_with_citations_set(self) -> None:
+        # Un response con citations presente debe poder construirse y sus
+        # URLs deben ser accesibles directamente.
+        data: _openai_compat.ChatCompletionResponse = {
+            "id": "chatcmpl-cit",
+            "object": "chat.completion",
+            "created": 1700000002,
+            "model": "gemini-search",
+            "choices": [],
+            "citations": [
+                "https://example.com/source1",
+                "https://example.com/source2",
+            ],
+        }
+        assert len(data["citations"]) == 2
+        assert data["citations"][0] == "https://example.com/source1"
+
+    def test_dict_with_all_fields_together(self) -> None:
+        # El caso completo: un response con user_tier Y citations, como llegaría
+        # de un modelo con búsqueda habilitada (ej. gemini-search, perplexity-reasoning).
+        data: _openai_compat.ChatCompletionResponse = {
+            "id": "chatcmpl-full",
+            "object": "chat.completion",
+            "created": 1700000003,
+            "model": "perplexity-reasoning",
+            "choices": [{"message": {"role": "assistant", "content": "respuesta"}}],
+            "user_tier": "nectar",
+            "citations": ["https://a.com", "https://b.com", "https://c.com"],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+        assert data["user_tier"] == "nectar"
+        assert len(data["citations"]) == 3
+        assert data["usage"]["total_tokens"] == 30
+
+    def test_user_tier_annotation_resolves_to_user_tier_alias(self) -> None:
+        # get_type_hints resuelve las anotaciones diferidas (from __future__ import annotations)
+        # y debe devolver el mismo objeto que UserTier del módulo.
+        hints = typing.get_type_hints(_openai_compat.ChatCompletionResponse)
+        assert "user_tier" in hints
+        assert hints["user_tier"] is _openai_compat.UserTier
+
+    def test_citations_annotation_resolves_to_list_of_str(self) -> None:
+        # citations debe anotarse como list[str], no como list[Any] ni como str.
+        hints = typing.get_type_hints(_openai_compat.ChatCompletionResponse)
+        assert "citations" in hints
+        annotation = hints["citations"]
+        # Verifica que sea alguna forma de list parametrizado con str.
+        assert typing.get_origin(annotation) is list
+        assert typing.get_args(annotation) == (str,)
+
+    @pytest.mark.parametrize("tier", ["anonymous", "spore", "seed", "flower", "nectar"])
+    def test_each_user_tier_value_is_assignable(self, tier: str) -> None:
+        # Cada uno de los cuatro valores válidos de UserTier debe poder asignarse
+        # al campo user_tier de un ChatCompletionResponse sin errores en runtime.
+        data: _openai_compat.ChatCompletionResponse = {
+            "id": "x",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "m",
+            "choices": [],
+            "user_tier": tier,  # type: ignore[typeddict-item]
+        }
+        assert data["user_tier"] == tier
+
+    def test_user_tier_not_in_required_keys(self) -> None:
+        # Doble comprobación: user_tier no debe estar en los campos requeridos.
+        # Si el API no devuelve user_tier, el response sigue siendo válido.
+        required = _openai_compat.ChatCompletionResponse.__required_keys__
+        assert "user_tier" not in required
+
+    def test_citations_not_in_required_keys(self) -> None:
+        # Doble comprobación: citations no debe estar en los campos requeridos.
+        # Modelos sin búsqueda no devuelven citations y eso es correcto.
+        required = _openai_compat.ChatCompletionResponse.__required_keys__
+        assert "citations" not in required
+
+    def test_is_subclass_of_required_base(self) -> None:
+        # ChatCompletionResponse debe ser reconocida como TypedDict que hereda
+        # de _ChatCompletionResponseRequired.
+        bases = _openai_compat.ChatCompletionResponse.__orig_bases__
+        assert _openai_compat._ChatCompletionResponseRequired in bases
