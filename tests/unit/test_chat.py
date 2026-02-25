@@ -1,13 +1,14 @@
-from pathlib import Path
-from typing import Any
 import threading
 import warnings
+from pathlib import Path
+from typing import Any
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
-import pytest
 from pydantic import ValidationError, BaseModel, Field
 from langchain_core.messages import HumanMessage, AIMessage
+
+import pytest
 
 import langchain_pollinations.chat as chat_module
 from langchain_pollinations.chat import (
@@ -238,7 +239,6 @@ def test_response_format_json_schema():
     dumped = schema_obj.model_dump(by_alias=True)
     assert "schema" in dumped
     assert dumped["schema"]["type"] == "object"
-
 
 
 def test_tool_function():
@@ -1693,23 +1693,6 @@ def test_chat_pollinations_bind_tools_with_description_from_docstring():
         assert len(tool.function.description) > 0
 
 
-
-
-'''
-def test_bind_tools_with_convert_to_openai_tool_returns_non_dict():
-    """Cubrir cuando convert_to_openai_tool retorna algo que no es dict"""
-    chat = ChatPollinations()
-
-    def mock_converter(tool):
-        return "not a dict"  # Retorna algo inválido
-
-    with patch("langchain_core.utils.function_calling.convert_to_openai_tool", mock_converter):
-        # Debe usar fallback tool_to_openai_tool
-        bound = chat.bind_tools([{"some": "tool"}])
-
-    assert bound.request_defaults.tools is not None
-'''
-
 def test_bind_tools_with_convert_returns_dict_without_type_or_name():
     """Cubrir dict sin 'type'='function' ni 'name'"""
     chat = ChatPollinations()
@@ -2610,10 +2593,6 @@ def test_load_text_model_ids_returns_copy():
     assert "intruder-value" not in chat_module._text_model_ids_cache
 
 
-# ---------------------------------------------------------------------------
-# Tests: ChatPollinationsConfig._validate_model_id
-# ---------------------------------------------------------------------------
-
 def test_validate_model_id_known_model_no_warning():
     """No UserWarning is emitted when the model ID is present in the catalog."""
     chat_module._text_model_ids_cache = ["openai", "gemini", "claude"]
@@ -2676,10 +2655,6 @@ def test_validate_model_id_warning_mentions_force_refresh():
     assert "force=True" in str(user_warnings[0].message)
 
 
-# ---------------------------------------------------------------------------
-# Tests: ChatPollinations.__init__ — integración con el catálogo
-# ---------------------------------------------------------------------------
-
 def test_chat_pollinations_init_triggers_catalog_load(monkeypatch):
     """ChatPollinations.__init__ calls _load_text_model_ids before field validation."""
     calls: list[dict] = []
@@ -2722,10 +2697,6 @@ def test_chat_pollinations_init_passes_api_key_to_loader(monkeypatch):
     assert received == ["sk_my_secret"]
 
 
-# ---------------------------------------------------------------------------
-# Test: thread safety (double-checked locking)
-# ---------------------------------------------------------------------------
-
 def test_load_text_model_ids_thread_safety():
     """
     Under concurrent load the API is called exactly once regardless of how many
@@ -2761,7 +2732,3 @@ def test_load_text_model_ids_thread_safety():
     assert mock_info.get_available_models.call_count == 1
     # Todos los hilos deben haber recibido el mismo resultado coherente
     assert all(r == ["model-concurrent-safe"] for r in results)
-
-
-
-

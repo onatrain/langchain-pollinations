@@ -26,6 +26,8 @@ class AudioTranscript(TypedDict, total=False):
     expires_at: int
 
 
+# Tipos del Request
+
 class ContentBlockText(TypedDict):
     """
     Standard text content block structure for message parts.
@@ -161,6 +163,56 @@ class PromptFilterResultItem(TypedDict):
 
     prompt_index: int
     content_filter_results: ContentFilterResult
+
+
+# Tipos del Response
+
+# Tier del usuario que realizó la request; llega en la raíz del response de
+# chat completions. Expuesto en response_metadata del AIMessage.
+UserTier = Literal["anonymous", "spore", "seed", "flower", "nectar"]
+
+
+class _ChatCompletionResponseRequired(TypedDict):
+    """
+    Required top-level fields that are always present in a chat completions response.
+    Used as the base class for ChatCompletionResponse.
+    """
+
+    id: str
+    object: str
+    created: int
+    model: str
+    choices: list[dict[str, Any]]
+
+
+class ChatCompletionResponse(_ChatCompletionResponseRequired, total=False):
+    """
+    Top-level structure of a ``/v1/chat/completions`` response.
+
+    Extends the required fields with optional ones that the Pollinations API
+    may include depending on the model, tier, and request configuration.
+
+    Fields added in the Feb-2026 API revision (gap 3.3):
+
+    - ``user_tier``: Tier of the authenticated user who made the request.
+      One of ``"anonymous"``, ``"seed"``, ``"flower"``, ``"nectar"``.
+      Exposed in ``response_metadata`` of the resulting ``AIMessage``.
+
+    - ``citations``: List of source URLs returned by search-enabled models
+      such as ``gemini-search`` or ``perplexity-reasoning``. Exposed in
+      ``response_metadata`` of the resulting ``AIMessage``.
+    """
+
+    system_fingerprint: str
+    usage: dict[str, Any]
+    # Nuevo campo — tier del usuario (gap 3.3)
+    user_tier: UserTier
+    # Nuevo campo — URLs de fuentes de modelos con búsqueda (gap 3.3)
+    citations: list[str]
+    prompt_filter_results: list[PromptFilterResultItem]
+
+
+# Helpers
 
 
 def _lc_tool_call_to_openai_tool_call(tc: Any) -> dict[str, Any]:
