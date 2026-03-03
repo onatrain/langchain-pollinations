@@ -1,6 +1,7 @@
 """
 This module provides the ModelInformation class to interact with Pollinations model endpoints.
-It facilitates listing and filtering available text and image models via synchronous and asynchronous methods.
+It facilitates listing and filtering available text, image, and audio models via synchronous
+and asynchronous methods.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ DEFAULT_BASE_URL = "https://gen.pollinations.ai"
 class ModelInformation:
     """
     Handles retrieval and parsing of available models from the Pollinations API.
-    Provides methods to list compatible, text-based, and image-based models.
+    Provides methods to list compatible, text-based, image-based, and audio-based models.
     """
 
     api_key: str | None = None
@@ -59,7 +60,7 @@ class ModelInformation:
             if not isinstance(model, dict):
                 continue
 
-            # Buscar identificador en orden de prioridad
+            # Look for identifier in priority order
             model_id = model.get("id") or model.get("model") or model.get("name")
 
             if model_id and isinstance(model_id, str):
@@ -69,64 +70,88 @@ class ModelInformation:
 
     def get_available_models(self) -> dict[str, list[str]]:
         """
-        Retrieve identifiers for all available text and image models synchronously.
+        Retrieve identifiers for all available text, image, and audio models synchronously.
 
         Returns:
-            A dictionary with "text" and "image" keys, each containing a list of model IDs.
+            A dictionary with ``"text"``, ``"image"``, and ``"audio"`` keys, each containing
+            a list of model IDs. A key maps to an empty list when the corresponding endpoint
+            is unreachable or returns an unexpected payload.
         """
         text_ids: list[str] = []
         image_ids: list[str] = []
+        audio_ids: list[str] = []
 
-        # Obtener modelos de texto
+        # Fetch text models
         try:
             text_models = self.list_text_models()
             text_ids = self._extract_model_ids(text_models)
         except Exception:
-            # Si falla, retornar lista vacía para texto
+            # Return empty list for text on failure
             pass
 
-        # Obtener modelos de imagen
+        # Fetch image models
         try:
             image_models = self.list_image_models()
             image_ids = self._extract_model_ids(image_models)
         except Exception:
-            # Si falla, retornar lista vacía para imagen
+            # Return empty list for image on failure
+            pass
+
+        # Fetch audio models
+        try:
+            audio_models = self.list_audio_models()
+            audio_ids = self._extract_model_ids(audio_models)
+        except Exception:
+            # Return empty list for audio on failure
             pass
 
         return {
             "text": text_ids,
             "image": image_ids,
+            "audio": audio_ids,
         }
 
     async def aget_available_models(self) -> dict[str, list[str]]:
         """
-        Retrieve identifiers for all available text and image models asynchronously.
+        Retrieve identifiers for all available text, image, and audio models asynchronously.
 
         Returns:
-            A dictionary with "text" and "image" keys, each containing a list of model IDs.
+            A dictionary with ``"text"``, ``"image"``, and ``"audio"`` keys, each containing
+            a list of model IDs. A key maps to an empty list when the corresponding endpoint
+            is unreachable or returns an unexpected payload.
         """
         text_ids: list[str] = []
         image_ids: list[str] = []
+        audio_ids: list[str] = []
 
-        # Obtener modelos de texto
+        # Fetch text models
         try:
             text_models = await self.alist_text_models()
             text_ids = self._extract_model_ids(text_models)
         except Exception:
-            # Si falla, retornar lista vacía para texto
+            # Return empty list for text on failure
             pass
 
-        # Obtener modelos de imagen
+        # Fetch image models
         try:
             image_models = await self.alist_image_models()
             image_ids = self._extract_model_ids(image_models)
         except Exception:
-            # Si falla, retornar lista vacía para imagen
+            # Return empty list for image on failure
+            pass
+
+        # Fetch audio models
+        try:
+            audio_models = await self.alist_audio_models()
+            audio_ids = self._extract_model_ids(audio_models)
+        except Exception:
+            # Return empty list for audio on failure
             pass
 
         return {
             "text": text_ids,
             "image": image_ids,
+            "audio": audio_ids,
         }
 
     def list_compatible_models(self) -> dict[str, Any]:
@@ -156,6 +181,18 @@ class ModelInformation:
         """
         return self._http.get("/image/models").json()
 
+    def list_audio_models(self) -> list[dict[str, Any]] | dict[str, Any]:
+        """
+        Fetch the full list of available audio models from the /audio/models endpoint.
+
+        Covers both TTS (text-to-speech) and STT (speech-to-text) models offered
+        by the Pollinations API.
+
+        Returns:
+            A list or dictionary containing detailed information about audio models.
+        """
+        return self._http.get("/audio/models").json()
+
     async def alist_compatible_models(self) -> dict[str, Any]:
         """
         Asynchronously list all OpenAI-compatible models available via the /v1/models endpoint.
@@ -182,3 +219,15 @@ class ModelInformation:
             A list or dictionary containing detailed information about image models.
         """
         return (await self._http.aget("/image/models")).json()
+
+    async def alist_audio_models(self) -> list[dict[str, Any]] | dict[str, Any]:
+        """
+        Asynchronously fetch the full list of available audio models from the /audio/models endpoint.
+
+        Covers both TTS (text-to-speech) and STT (speech-to-text) models offered
+        by the Pollinations API.
+
+        Returns:
+            A list or dictionary containing detailed information about audio models.
+        """
+        return (await self._http.aget("/audio/models")).json()
