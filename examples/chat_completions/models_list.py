@@ -12,4 +12,9 @@ print(convert_to_json(mi.list_compatible_models()))      # OpenAI-compatible (/v
 print("\nTodos los modelos de texto:")
 print(convert_to_json(mi.list_text_models()))    # (/text/models)
 print("\nTodos los modelos de imagen:")
-print(convert_to_json(mi.list_image_models()))   # (/image/models) incluye modelos de imagen y video
+print(mi.list_image_models())   # (/image/models) incluye modelos de imagen y video
+print("\nTodos los modelos de audio:")
+print(mi.list_audio_models())   # (/audio/models) incluye modelos de TTS y STT
+print("\nNombres de los modelos disponibles:")
+from pprint import pprint
+pprint(mi.get_available_models())

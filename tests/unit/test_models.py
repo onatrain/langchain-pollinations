@@ -1,453 +1,426 @@
-from dataclasses import dataclass
-from typing import Any
+from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from langchain_pollinations.models import ModelInformation, DEFAULT_BASE_URL
+from langchain_pollinations.models import DEFAULT_BASE_URL, ModelInformation
 
 
-@dataclass
-class DummyAuth:
-    api_key: str
+def _make_response(payload):
+    resp = MagicMock()
+    resp.json.return_value = payload
+    return resp
 
 
-class DummyResponse:
-    def __init__(self, data: Any):
-        self._data = data
+SAMPLE_TEXT_MODELS = [
+    {"id": "openai", "name": "OpenAI GPT-4"},
+    {"id": "mistral", "name": "Mistral"},
+    {"model": "llama"},
+    {"name": "claude"},
+]
 
-    def json(self) -> Any:
-        return self._data
+SAMPLE_IMAGE_MODELS = [
+    {"id": "flux"},
+    {"id": "turbo"},
+]
 
+SAMPLE_AUDIO_MODELS = [
+    {"id": "openai-audio"},
+    {"id": "elevenmusic"},
+]
 
-class DummyHttpClient:
-    def __init__(self, *, config, api_key: str):
-        self.config = config
-        self.api_key = api_key
-        self.calls: list[tuple[str, str]] = []
+SAMPLE_COMPATIBLE_MODELS = {"object": "list", "data": [{"id": "gpt-4"}]}
 
-    def get(self, path: str):
-        self.calls.append(("get", path))
-        return DummyResponse({"path": path})
 
-    async def aget(self, path: str):
-        self.calls.append(("aget", path))
-        return DummyResponse({"path": path})
+@pytest.fixture
+def mock_http():
+    http = MagicMock()
+    http.get.return_value = _make_response([])
+    http.aget = AsyncMock(return_value=_make_response([]))
+    return http
 
 
-@pytest.fixture(autouse=True)
-def patch_auth_and_http(monkeypatch):
-    # Forzar AuthConfig a devolver un DummyAuth sin tocar el entorno.
-    monkeypatch.setattr(
-        "langchain_pollinations._auth.AuthConfig.from_env_or_value",
-        staticmethod(lambda api_key: DummyAuth(api_key=api_key or "dummy")),
-    )
-    # Reemplazar el cliente HTTP real por uno dummy que no hace red.
-    monkeypatch.setattr(
-        "langchain_pollinations.models.PollinationsHttpClient",
-        DummyHttpClient,
-    )
-    yield
-
-
-def test_model_information_initializes_with_defaults():
-    mi = ModelInformation()
-
-    assert mi.base_url == DEFAULT_BASE_URL
-    assert mi.timeout_s == 120.0
-    # _http es un DummyHttpClient según el patch.
-    assert isinstance(mi._http, DummyHttpClient)
-    assert mi._http.api_key == "dummy"
-
-
-def test_list_compatible_models_uses_http_client():
-    mi = ModelInformation(api_key="key-123")
-
-    data = mi.list_compatible_models()
-
-    assert data == {"path": "/v1/models"}
-    assert mi._http.calls == [("get", "/v1/models")]
-
-
-def test_list_text_models_uses_http_client():
-    mi = ModelInformation(api_key="key-123")
-
-    data = mi.list_text_models()
-
-    assert data == {"path": "/text/models"}
-    assert mi._http.calls == [("get", "/text/models")]
-
-
-def test_list_image_models_uses_http_client():
-    mi = ModelInformation(api_key="key-123")
-
-    data = mi.list_image_models()
-
-    assert data == {"path": "/image/models"}
-    assert mi._http.calls == [("get", "/image/models")]
-
-
-@pytest.mark.asyncio
-async def test_alist_compatible_models_uses_async_http_client():
-    mi = ModelInformation(api_key="key-async")
-
-    data = await mi.alist_compatible_models()
-
-    assert data == {"path": "/v1/models"}
-    assert mi._http.calls == [("aget", "/v1/models")]
-
-
-@pytest.mark.asyncio
-async def test_alist_text_models_uses_async_http_client():
-    mi = ModelInformation(api_key="key-async")
-
-    data = await mi.alist_text_models()
-
-    assert data == {"path": "/text/models"}
-    assert mi._http.calls == [("aget", "/text/models")]
-
-
-@pytest.mark.asyncio
-async def test_alist_image_models_uses_async_http_client():
-    mi = ModelInformation(api_key="key-async")
-
-    data = await mi.alist_image_models()
-
-    assert data == {"path": "/image/models"}
-    assert mi._http.calls == [("aget", "/image/models")]
-
-
-def test_extract_model_ids_with_id_field():
-    """Extrae IDs cuando los modelos usan el campo 'id'."""
-    models_data = [
-        {"id": "openai", "name": "OpenAI", "pricing": {}},
-        {"id": "claude", "name": "Claude", "pricing": {}},
-        {"id": "gemini", "name": "Gemini", "pricing": {}},
-    ]
-
-    result = ModelInformation._extract_model_ids(models_data)
-
-    assert result == ["openai", "claude", "gemini"]
-
-
-def test_extract_model_ids_with_model_field():
-    """Extrae IDs cuando los modelos usan el campo 'model'."""
-    models_data = [
-        {"model": "flux", "type": "image"},
-        {"model": "gptimage", "type": "image"},
-    ]
-
-    result = ModelInformation._extract_model_ids(models_data)
-
-    assert result == ["flux", "gptimage"]
-
-
-def test_extract_model_ids_with_name_field():
-    """Extrae IDs cuando los modelos usan el campo 'name'."""
-    models_data = [
-        {"name": "veo", "capabilities": ["video"]},
-        {"name": "seedance", "capabilities": ["image"]},
-    ]
-
-    result = ModelInformation._extract_model_ids(models_data)
-
-    assert result == ["veo", "seedance"]
-
-
-def test_extract_model_ids_with_mixed_fields():
-    """Extrae IDs con prioridad: id > model > name."""
-    models_data = [
-        {"id": "openai", "model": "gpt-4", "name": "GPT-4"},  # Usa 'id'
-        {"model": "claude", "name": "Claude"},  # Usa 'model'
-        {"name": "gemini"},  # Usa 'name'
-    ]
-
-    result = ModelInformation._extract_model_ids(models_data)
-
-    assert result == ["openai", "claude", "gemini"]
-
-
-def test_extract_model_ids_empty_list():
-    """Retorna lista vacía cuando se pasa una lista vacía."""
-    result = ModelInformation._extract_model_ids([])
-
-    assert result == []
-
-
-def test_extract_model_ids_not_a_list():
-    """Retorna lista vacía cuando el input no es una lista."""
-    result = ModelInformation._extract_model_ids({"not": "a list"})
-
-    assert result == []
-
-
-def test_extract_model_ids_invalid_items():
-    """Ignora items que no son dicts o que no tienen campos de ID válidos."""
-    models_data = [
-        {"id": "openai"},  # Válido
-        "not-a-dict",  # Inválido (string)
-        {"no_id_field": "value"},  # Inválido (sin campo de ID)
-        {"id": 123},  # Inválido (ID no es string)
-        {"model": "claude"},  # Válido
-        None,  # Inválido
-    ]
-
-    result = ModelInformation._extract_model_ids(models_data)
-
-    assert result == ["openai", "claude"]
-
-
-def test_get_available_models_success():
-    """Obtiene modelos de texto e imagen exitosamente."""
-    mi = ModelInformation(api_key="test-key")
-
-    def custom_get(path: str):
-        mi._http.calls.append(("get", path))
-        if path == "/text/models":
-            data = [
-                {"id": "openai", "pricing": {}},
-                {"id": "claude", "pricing": {}},
-                {"id": "mistral", "pricing": {}},
-            ]
-        elif path == "/image/models":
-            data = [
-                {"model": "flux", "type": "image"},
-                {"model": "gptimage", "type": "image"},
-            ]
-        else:
-            data = {"path": path}
-        return DummyResponse(data)
-
-    mi._http.get = custom_get
-
-    result = mi.get_available_models()
-
-    assert result == {
-        "text": ["openai", "claude", "mistral"],
-        "image": ["flux", "gptimage"],
-    }
-    assert ("get", "/text/models") in mi._http.calls
-    assert ("get", "/image/models") in mi._http.calls
-
-
-def test_get_available_models_empty_responses():
-    """Maneja respuestas vacías correctamente."""
-    mi = ModelInformation(api_key="test-key")
-
-    def custom_get(path: str):
-        mi._http.calls.append(("get", path))
-        return DummyResponse([])
-
-    mi._http.get = custom_get
-
-    result = mi.get_available_models()
-
-    assert result == {"text": [], "image": []}
-
-
-def test_get_available_models_text_endpoint_fails():
-    """Retorna lista vacía para texto si el endpoint falla."""
-    mi = ModelInformation(api_key="test-key")
-
-    def custom_get(path: str):
-        mi._http.calls.append(("get", path))
-        if path == "/text/models":
-            raise Exception("Network error")
-        elif path == "/image/models":
-            return DummyResponse([{"model": "flux"}])
-        return DummyResponse([])
-
-    mi._http.get = custom_get
-
-    result = mi.get_available_models()
-
-    assert result == {"text": [], "image": ["flux"]}
-
-
-def test_get_available_models_image_endpoint_fails():
-    """Retorna lista vacía para imagen si el endpoint falla."""
-    mi = ModelInformation(api_key="test-key")
-
-    def custom_get(path: str):
-        mi._http.calls.append(("get", path))
-        if path == "/text/models":
-            return DummyResponse([{"id": "openai"}])
-        elif path == "/image/models":
-            raise Exception("Network error")
-        return DummyResponse([])
-
-    mi._http.get = custom_get
-
-    result = mi.get_available_models()
-
-    assert result == {"text": ["openai"], "image": []}
-
-
-def test_get_available_models_both_endpoints_fail():
-    """Retorna listas vacías si ambos endpoints fallan."""
-    mi = ModelInformation(api_key="test-key")
-
-    def custom_get(path: str):
-        mi._http.calls.append(("get", path))
-        raise Exception("Network error")
-
-    mi._http.get = custom_get
-
-    result = mi.get_available_models()
-
-    assert result == {"text": [], "image": []}
-
-
-def test_get_available_models_invalid_data_format():
-    """Maneja respuestas con formato inválido (no lista)."""
-    mi = ModelInformation(api_key="test-key")
-
-    def custom_get(path: str):
-        mi._http.calls.append(("get", path))
-        return DummyResponse({"error": "invalid format"})
-
-    mi._http.get = custom_get
-
-    result = mi.get_available_models()
-
-    assert result == {"text": [], "image": []}
-
-
-@pytest.mark.asyncio
-async def test_aget_available_models_success():
-    """Obtiene modelos de texto e imagen exitosamente (async)."""
-    mi = ModelInformation(api_key="test-key")
-
-    async def custom_aget(path: str):
-        mi._http.calls.append(("aget", path))
-        if path == "/text/models":
-            data = [
-                {"id": "openai"},
-                {"id": "claude"},
-                {"id": "gemini"},
-            ]
-        elif path == "/image/models":
-            data = [
-                {"model": "flux"},
-                {"model": "veo"},
-                {"model": "seedance"},
-            ]
-        else:
-            data = {"path": path}
-        return DummyResponse(data)
-
-    mi._http.aget = custom_aget
-
-    result = await mi.aget_available_models()
-
-    assert result == {
-        "text": ["openai", "claude", "gemini"],
-        "image": ["flux", "veo", "seedance"],
-    }
-    assert ("aget", "/text/models") in mi._http.calls
-    assert ("aget", "/image/models") in mi._http.calls
-
-
-@pytest.mark.asyncio
-async def test_aget_available_models_empty_responses():
-    """Maneja respuestas vacías correctamente (async)."""
-    mi = ModelInformation(api_key="test-key")
-
-    async def custom_aget(path: str):
-        mi._http.calls.append(("aget", path))
-        return DummyResponse([])
-
-    mi._http.aget = custom_aget
-
-    result = await mi.aget_available_models()
-
-    assert result == {"text": [], "image": []}
-
-
-@pytest.mark.asyncio
-async def test_aget_available_models_text_endpoint_fails():
-    """Retorna lista vacía para texto si el endpoint falla (async)."""
-    mi = ModelInformation(api_key="test-key")
-
-    async def custom_aget(path: str):
-        mi._http.calls.append(("aget", path))
-        if path == "/text/models":
-            raise Exception("Async network error")
-        elif path == "/image/models":
-            return DummyResponse([{"model": "gptimage"}])
-        return DummyResponse([])
-
-    mi._http.aget = custom_aget
-
-    result = await mi.aget_available_models()
-
-    assert result == {"text": [], "image": ["gptimage"]}
-
-
-@pytest.mark.asyncio
-async def test_aget_available_models_image_endpoint_fails():
-    """Retorna lista vacía para imagen si el endpoint falla (async)."""
-    mi = ModelInformation(api_key="test-key")
-
-    async def custom_aget(path: str):
-        mi._http.calls.append(("aget", path))
-        if path == "/text/models":
-            return DummyResponse([{"id": "mistral"}])
-        elif path == "/image/models":
-            raise Exception("Async network error")
-        return DummyResponse([])
-
-    mi._http.aget = custom_aget
-
-    result = await mi.aget_available_models()
-
-    assert result == {"text": ["mistral"], "image": []}
-
-
-@pytest.mark.asyncio
-async def test_aget_available_models_both_endpoints_fail():
-    """Retorna listas vacías si ambos endpoints fallan (async)."""
-    mi = ModelInformation(api_key="test-key")
-
-    async def custom_aget(path: str):
-        mi._http.calls.append(("aget", path))
-        raise Exception("Async network error")
-
-    mi._http.aget = custom_aget
-
-    result = await mi.aget_available_models()
-
-    assert result == {"text": [], "image": []}
-
-
-@pytest.mark.asyncio
-async def test_aget_available_models_mixed_valid_invalid_data():
-    """Maneja mezcla de datos válidos e inválidos (async)."""
-    mi = ModelInformation(api_key="test-key")
-
-    async def custom_aget(path: str):
-        mi._http.calls.append(("aget", path))
-        if path == "/text/models":
-            data = [
-                {"id": "valid-model-1"},
-                "invalid-string",
-                {"id": "valid-model-2"},
-                {"no_id": "invalid"},
-            ]
-        elif path == "/image/models":
-            data = [
-                {"model": "image-model-1"},
-                {"model": 123},
-                {"name": "image-model-2"},
-            ]
-        else:
-            data = []
-        return DummyResponse(data)
-
-    mi._http.aget = custom_aget
-
-    result = await mi.aget_available_models()
-
-    assert result == {
-        "text": ["valid-model-1", "valid-model-2"],
-        "image": ["image-model-1", "image-model-2"],
-    }
+@pytest.fixture
+def model_info(mock_http):
+    with (
+        patch("langchain_pollinations.models.AuthConfig.from_env_or_value") as mock_auth,
+        patch("langchain_pollinations.models.PollinationsHttpClient", return_value=mock_http),
+    ):
+        mock_auth.return_value = MagicMock(api_key="test-key")
+        mi = ModelInformation(api_key="test-key")
+    # _http already holds mock_http; reassign explicitly for test clarity
+    object.__setattr__(mi, "_http", mock_http)
+    return mi
+
+
+class TestExtractModelIds:
+
+    def test_empty_list_returns_empty(self):
+        assert ModelInformation._extract_model_ids([]) == []
+
+    def test_not_a_list_returns_empty(self):
+        assert ModelInformation._extract_model_ids({}) == []
+        assert ModelInformation._extract_model_ids(None) == []
+        assert ModelInformation._extract_model_ids("string") == []
+        assert ModelInformation._extract_model_ids(42) == []
+
+    def test_extracts_id_field(self):
+        data = [{"id": "flux"}, {"id": "turbo"}]
+        assert ModelInformation._extract_model_ids(data) == ["flux", "turbo"]
+
+    def test_falls_back_to_model_field(self):
+        data = [{"model": "llama"}]
+        assert ModelInformation._extract_model_ids(data) == ["llama"]
+
+    def test_falls_back_to_name_field(self):
+        data = [{"name": "claude"}]
+        assert ModelInformation._extract_model_ids(data) == ["claude"]
+
+    def test_id_takes_priority_over_model_and_name(self):
+        data = [{"id": "primary", "model": "secondary", "name": "tertiary"}]
+        assert ModelInformation._extract_model_ids(data) == ["primary"]
+
+    def test_model_takes_priority_over_name(self):
+        data = [{"model": "secondary", "name": "tertiary"}]
+        assert ModelInformation._extract_model_ids(data) == ["secondary"]
+
+    def test_skips_non_dict_items(self):
+        data = [{"id": "ok"}, "string", 42, None, {"id": "also_ok"}]
+        assert ModelInformation._extract_model_ids(data) == ["ok", "also_ok"]
+
+    def test_skips_items_with_no_known_keys(self):
+        data = [{"unknown_key": "value"}, {"id": "valid"}]
+        assert ModelInformation._extract_model_ids(data) == ["valid"]
+
+    def test_skips_non_string_id_values(self):
+        data = [{"id": 123}, {"id": None}, {"id": "valid"}]
+        assert ModelInformation._extract_model_ids(data) == ["valid"]
+
+    def test_full_mixed_sample(self):
+        result = ModelInformation._extract_model_ids(SAMPLE_TEXT_MODELS)
+        assert result == ["openai", "mistral", "llama", "claude"]
+
+
+class TestModelInformationInit:
+
+    def _make(self, **kwargs):
+        with (
+            patch("langchain_pollinations.models.AuthConfig.from_env_or_value") as mock_auth,
+            patch("langchain_pollinations.models.PollinationsHttpClient") as mock_cls,
+        ):
+            mock_auth.return_value = MagicMock(api_key="key")
+            mock_cls.return_value = MagicMock()
+            mi = ModelInformation(**kwargs)
+            return mi, mock_auth, mock_cls
+
+    def test_default_base_url(self):
+        mi, _, _ = self._make(api_key="key")
+        assert mi.base_url == DEFAULT_BASE_URL
+
+    def test_custom_base_url(self):
+        mi, _, _ = self._make(api_key="key", base_url="https://custom.example.com")
+        assert mi.base_url == "https://custom.example.com"
+
+    def test_default_timeout(self):
+        mi, _, _ = self._make(api_key="key")
+        assert mi.timeout_s == 120.0
+
+    def test_custom_timeout(self):
+        mi, _, _ = self._make(api_key="key", timeout_s=30.0)
+        assert mi.timeout_s == 30.0
+
+    def test_http_client_is_set(self):
+        mi, _, mock_cls = self._make(api_key="key")
+        assert mi._http is mock_cls.return_value
+
+    def test_api_key_none_delegates_to_auth(self):
+        mi, mock_auth, _ = self._make(api_key=None)
+        mock_auth.assert_called_once_with(None)
+
+    def test_api_key_passed_to_auth(self):
+        mi, mock_auth, _ = self._make(api_key="explicit-key")
+        mock_auth.assert_called_once_with("explicit-key")
+
+    def test_http_client_receives_base_url(self):
+        from langchain_pollinations.models import PollinationsHttpClient  # noqa: F401
+        with (
+            patch("langchain_pollinations.models.AuthConfig.from_env_or_value") as mock_auth,
+            patch("langchain_pollinations.models.PollinationsHttpClient") as mock_cls,
+            patch("langchain_pollinations.models.HttpConfig") as mock_config_cls,
+        ):
+            mock_auth.return_value = MagicMock(api_key="key")
+            mock_cls.return_value = MagicMock()
+            ModelInformation(api_key="key", base_url="https://custom.example.com")
+            mock_config_cls.assert_called_once_with(
+                base_url="https://custom.example.com", timeout_s=120.0
+            )
+
+
+class TestSyncListMethods:
+
+    def test_list_text_models_path_and_return(self, model_info, mock_http):
+        mock_http.get.return_value = _make_response(SAMPLE_TEXT_MODELS)
+        result = model_info.list_text_models()
+        mock_http.get.assert_called_once_with("/text/models")
+        assert result == SAMPLE_TEXT_MODELS
+
+    def test_list_image_models_path_and_return(self, model_info, mock_http):
+        mock_http.get.return_value = _make_response(SAMPLE_IMAGE_MODELS)
+        result = model_info.list_image_models()
+        mock_http.get.assert_called_once_with("/image/models")
+        assert result == SAMPLE_IMAGE_MODELS
+
+    def test_list_audio_models_path_and_return(self, model_info, mock_http):
+        mock_http.get.return_value = _make_response(SAMPLE_AUDIO_MODELS)
+        result = model_info.list_audio_models()
+        mock_http.get.assert_called_once_with("/audio/models")
+        assert result == SAMPLE_AUDIO_MODELS
+
+    def test_list_compatible_models_path_and_return(self, model_info, mock_http):
+        mock_http.get.return_value = _make_response(SAMPLE_COMPATIBLE_MODELS)
+        result = model_info.list_compatible_models()
+        mock_http.get.assert_called_once_with("/v1/models")
+        assert result == SAMPLE_COMPATIBLE_MODELS
+
+    def test_list_text_models_returns_dict_payload(self, model_info, mock_http):
+        payload = {"models": ["a", "b"]}
+        mock_http.get.return_value = _make_response(payload)
+        assert model_info.list_text_models() == payload
+
+    def test_list_audio_models_returns_empty_list(self, model_info, mock_http):
+        mock_http.get.return_value = _make_response([])
+        assert model_info.list_audio_models() == []
+
+    def test_list_image_models_returns_empty_list(self, model_info, mock_http):
+        mock_http.get.return_value = _make_response([])
+        assert model_info.list_image_models() == []
+
+    def test_list_audio_models_propagates_http_exception(self, model_info, mock_http):
+        mock_http.get.side_effect = RuntimeError("connection refused")
+        with pytest.raises(RuntimeError, match="connection refused"):
+            model_info.list_audio_models()
+
+    def test_list_text_models_propagates_http_exception(self, model_info, mock_http):
+        mock_http.get.side_effect = ConnectionError("timeout")
+        with pytest.raises(ConnectionError):
+            model_info.list_text_models()
+
+
+class TestAsyncListMethods:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_alist_text_models_path_and_return(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(return_value=_make_response(SAMPLE_TEXT_MODELS))
+        result = await model_info.alist_text_models()
+        mock_http.aget.assert_called_once_with("/text/models")
+        assert result == SAMPLE_TEXT_MODELS
+
+    async def test_alist_image_models_path_and_return(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(return_value=_make_response(SAMPLE_IMAGE_MODELS))
+        result = await model_info.alist_image_models()
+        mock_http.aget.assert_called_once_with("/image/models")
+        assert result == SAMPLE_IMAGE_MODELS
+
+    async def test_alist_audio_models_path_and_return(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(return_value=_make_response(SAMPLE_AUDIO_MODELS))
+        result = await model_info.alist_audio_models()
+        mock_http.aget.assert_called_once_with("/audio/models")
+        assert result == SAMPLE_AUDIO_MODELS
+
+    async def test_alist_compatible_models_path_and_return(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(return_value=_make_response(SAMPLE_COMPATIBLE_MODELS))
+        result = await model_info.alist_compatible_models()
+        mock_http.aget.assert_called_once_with("/v1/models")
+        assert result == SAMPLE_COMPATIBLE_MODELS
+
+    async def test_alist_audio_models_returns_empty_list(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(return_value=_make_response([]))
+        assert await model_info.alist_audio_models() == []
+
+    async def test_alist_audio_models_propagates_exception(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(side_effect=RuntimeError("network error"))
+        with pytest.raises(RuntimeError, match="network error"):
+            await model_info.alist_audio_models()
+
+    async def test_alist_text_models_propagates_exception(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(side_effect=ConnectionError("timeout"))
+        with pytest.raises(ConnectionError):
+            await model_info.alist_text_models()
+
+
+class TestGetAvailableModels:
+
+    def _side_effect_all_ok(self, path):
+        mapping = {
+            "/text/models": SAMPLE_TEXT_MODELS,
+            "/image/models": SAMPLE_IMAGE_MODELS,
+            "/audio/models": SAMPLE_AUDIO_MODELS,
+        }
+        return _make_response(mapping.get(path, []))
+
+    def test_result_has_exactly_three_keys(self, model_info, mock_http):
+        mock_http.get.return_value = _make_response([])
+        assert set(model_info.get_available_models().keys()) == {"text", "image", "audio"}
+
+    def test_all_catalogs_populated(self, model_info, mock_http):
+        mock_http.get.side_effect = self._side_effect_all_ok
+        result = model_info.get_available_models()
+        assert result["text"] == ["openai", "mistral", "llama", "claude"]
+        assert result["image"] == ["flux", "turbo"]
+        assert result["audio"] == ["openai-audio", "elevenmusic"]
+
+    def test_text_failure_yields_empty_text(self, model_info, mock_http):
+        def _side(path):
+            if path == "/text/models":
+                raise RuntimeError("text down")
+            return _make_response(
+                SAMPLE_IMAGE_MODELS if path == "/image/models" else SAMPLE_AUDIO_MODELS
+            )
+        mock_http.get.side_effect = _side
+        result = model_info.get_available_models()
+        assert result["text"] == []
+        assert result["image"] == ["flux", "turbo"]
+        assert result["audio"] == ["openai-audio", "elevenmusic"]
+
+    def test_image_failure_yields_empty_image(self, model_info, mock_http):
+        def _side(path):
+            if path == "/image/models":
+                raise RuntimeError("image down")
+            return _make_response(
+                SAMPLE_TEXT_MODELS if path == "/text/models" else SAMPLE_AUDIO_MODELS
+            )
+        mock_http.get.side_effect = _side
+        result = model_info.get_available_models()
+        assert result["image"] == []
+        assert result["text"] == ["openai", "mistral", "llama", "claude"]
+        assert result["audio"] == ["openai-audio", "elevenmusic"]
+
+    def test_audio_failure_yields_empty_audio(self, model_info, mock_http):
+        def _side(path):
+            if path == "/audio/models":
+                raise RuntimeError("audio down")
+            return _make_response(
+                SAMPLE_TEXT_MODELS if path == "/text/models" else SAMPLE_IMAGE_MODELS
+            )
+        mock_http.get.side_effect = _side
+        result = model_info.get_available_models()
+        assert result["audio"] == []
+        assert result["text"] == ["openai", "mistral", "llama", "claude"]
+        assert result["image"] == ["flux", "turbo"]
+
+    def test_all_endpoints_fail_returns_three_empty_lists(self, model_info, mock_http):
+        mock_http.get.side_effect = RuntimeError("all down")
+        assert model_info.get_available_models() == {"text": [], "image": [], "audio": []}
+
+    def test_does_not_propagate_any_exception(self, model_info, mock_http):
+        mock_http.get.side_effect = Exception("unexpected")
+        result = model_info.get_available_models()
+        assert isinstance(result, dict)
+
+    def test_unexpected_dict_payload_yields_empty_lists(self, model_info, mock_http):
+        mock_http.get.return_value = _make_response({"unexpected": "shape"})
+        assert model_info.get_available_models() == {"text": [], "image": [], "audio": []}
+
+    def test_value_types_are_lists(self, model_info, mock_http):
+        mock_http.get.side_effect = self._side_effect_all_ok
+        result = model_info.get_available_models()
+        for key in ("text", "image", "audio"):
+            assert isinstance(result[key], list)
+
+    def test_each_endpoint_called_exactly_once(self, model_info, mock_http):
+        mock_http.get.side_effect = self._side_effect_all_ok
+        model_info.get_available_models()
+        paths_called = [call.args[0] for call in mock_http.get.call_args_list]
+        assert paths_called.count("/text/models") == 1
+        assert paths_called.count("/image/models") == 1
+        assert paths_called.count("/audio/models") == 1
+
+
+class TestAgetAvailableModels:
+    pytestmark = pytest.mark.asyncio
+
+    async def _side_effect_all_ok(self, path):
+        mapping = {
+            "/text/models": SAMPLE_TEXT_MODELS,
+            "/image/models": SAMPLE_IMAGE_MODELS,
+            "/audio/models": SAMPLE_AUDIO_MODELS,
+        }
+        return _make_response(mapping.get(path, []))
+
+    async def test_result_has_exactly_three_keys(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(return_value=_make_response([]))
+        result = await model_info.aget_available_models()
+        assert set(result.keys()) == {"text", "image", "audio"}
+
+    async def test_all_catalogs_populated(self, model_info, mock_http):
+        mock_http.aget.side_effect = self._side_effect_all_ok
+        result = await model_info.aget_available_models()
+        assert result["text"] == ["openai", "mistral", "llama", "claude"]
+        assert result["image"] == ["flux", "turbo"]
+        assert result["audio"] == ["openai-audio", "elevenmusic"]
+
+    async def test_text_failure_yields_empty_text(self, model_info, mock_http):
+        async def _side(path):
+            if path == "/text/models":
+                raise RuntimeError("text down")
+            return _make_response(
+                SAMPLE_IMAGE_MODELS if path == "/image/models" else SAMPLE_AUDIO_MODELS
+            )
+        mock_http.aget.side_effect = _side
+        result = await model_info.aget_available_models()
+        assert result["text"] == []
+        assert result["image"] == ["flux", "turbo"]
+        assert result["audio"] == ["openai-audio", "elevenmusic"]
+
+    async def test_image_failure_yields_empty_image(self, model_info, mock_http):
+        async def _side(path):
+            if path == "/image/models":
+                raise RuntimeError("image down")
+            return _make_response(
+                SAMPLE_TEXT_MODELS if path == "/text/models" else SAMPLE_AUDIO_MODELS
+            )
+        mock_http.aget.side_effect = _side
+        result = await model_info.aget_available_models()
+        assert result["image"] == []
+        assert result["text"] == ["openai", "mistral", "llama", "claude"]
+        assert result["audio"] == ["openai-audio", "elevenmusic"]
+
+    async def test_audio_failure_yields_empty_audio(self, model_info, mock_http):
+        async def _side(path):
+            if path == "/audio/models":
+                raise RuntimeError("audio down")
+            return _make_response(
+                SAMPLE_TEXT_MODELS if path == "/text/models" else SAMPLE_IMAGE_MODELS
+            )
+        mock_http.aget.side_effect = _side
+        result = await model_info.aget_available_models()
+        assert result["audio"] == []
+        assert result["text"] == ["openai", "mistral", "llama", "claude"]
+        assert result["image"] == ["flux", "turbo"]
+
+    async def test_all_endpoints_fail_returns_three_empty_lists(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(side_effect=RuntimeError("all down"))
+        assert await model_info.aget_available_models() == {"text": [], "image": [], "audio": []}
+
+    async def test_does_not_propagate_any_exception(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(side_effect=Exception("unexpected"))
+        result = await model_info.aget_available_models()
+        assert isinstance(result, dict)
+
+    async def test_unexpected_dict_payload_yields_empty_lists(self, model_info, mock_http):
+        mock_http.aget = AsyncMock(return_value=_make_response({"unexpected": "shape"}))
+        assert await model_info.aget_available_models() == {"text": [], "image": [], "audio": []}
+
+    async def test_value_types_are_lists(self, model_info, mock_http):
+        mock_http.aget.side_effect = self._side_effect_all_ok
+        result = await model_info.aget_available_models()
+        for key in ("text", "image", "audio"):
+            assert isinstance(result[key], list)
+
+    async def test_each_endpoint_called_exactly_once(self, model_info, mock_http):
+        mock_http.aget.side_effect = self._side_effect_all_ok
+        await model_info.aget_available_models()
+        paths_called = [call.args[0] for call in mock_http.aget.call_args_list]
+        assert paths_called.count("/text/models") == 1
+        assert paths_called.count("/image/models") == 1
+        assert paths_called.count("/audio/models") == 1
