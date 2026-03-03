@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Beta]
 
+### [0.2.6b1] - 2026-03-02
+
+#### Fixed
+- Dynamic load of model names 
+- MessageContentPart support completed
+- Documentation updated
+
+#### Added
+- New 402 API error handling 
+- AccountInformation output types 
+
 ### [0.2.5b2] - 2026-02-21
 
 #### Fixed

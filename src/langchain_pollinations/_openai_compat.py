@@ -28,6 +28,7 @@ class AudioTranscript(TypedDict, total=False):
 
 # Tipos del Request
 
+
 class ContentBlockText(TypedDict):
     """
     Standard text content block structure for message parts.
@@ -46,6 +47,16 @@ class ContentBlockImageUrl(TypedDict):
 
     type: Literal["image_url"]
     image_url: dict[str, Any]  # {url: str, detail?: "auto"|"low"|"high", mime_type?: str}
+
+
+class ContentBlockInputAudio(TypedDict):
+    """
+    Content block for audio input.
+    Includes the base 64 encoded audio data and format of the audio.
+    """
+
+    type: Literal["input_audio"]
+    input_audio: dict[str, Any]  # {data: str, format: str}
 
 
 class ContentBlockVideoUrl(TypedDict):
@@ -121,6 +132,7 @@ class ContentBlockRedactedThinking(TypedDict):
 ContentBlock = (
     ContentBlockText
     | ContentBlockImageUrl
+    | ContentBlockInputAudio
     | ContentBlockVideoUrl
     | ContentBlockFile
     | ContentBlockThinking
@@ -191,16 +203,6 @@ class ChatCompletionResponse(_ChatCompletionResponseRequired, total=False):
 
     Extends the required fields with optional ones that the Pollinations API
     may include depending on the model, tier, and request configuration.
-
-    Fields added in the Feb-2026 API revision (gap 3.3):
-
-    - ``user_tier``: Tier of the authenticated user who made the request.
-      One of ``"anonymous"``, ``"seed"``, ``"flower"``, ``"nectar"``.
-      Exposed in ``response_metadata`` of the resulting ``AIMessage``.
-
-    - ``citations``: List of source URLs returned by search-enabled models
-      such as ``gemini-search`` or ``perplexity-reasoning``. Exposed in
-      ``response_metadata`` of the resulting ``AIMessage``.
     """
 
     system_fingerprint: str

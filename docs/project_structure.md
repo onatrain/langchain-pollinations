@@ -40,7 +40,15 @@ langchain-pollinations/
 │   └── debugging.md
 ├── docs/
 │   ├── api.json
-│   ├── api_reference.md
+│   ├── api_reference/
+│   │   ├── 01_Overview.md
+│   │   ├── 02_ChatPollinations.md
+│   │   ├── 03_ChatPollinationsConfig.md
+│   │   ├── 04_Types.md
+│   │   ├── 05_ImagePollinations.md
+│   │   ├── 06_AccountInformation.md
+│   │   ├── 07_ModelInformation.md
+│   │   └── 08_PollinationsAPIError.md
 │   ├── code_structure_and_composition.md
 │   ├── design_decissions.md
 │   ├── project_structure.md
