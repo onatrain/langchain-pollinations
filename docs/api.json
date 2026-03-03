@@ -2561,35 +2561,7 @@
                   "model": {
                     "default": "openai",
                     "description": "AI model for text generation. See /v1/models for full list.",
-                    "type": "string",
-                    "enum": [
-                      "openai",
-                      "openai-fast",
-                      "openai-large",
-                      "qwen-coder",
-                      "mistral",
-                      "openai-audio",
-                      "gemini",
-                      "gemini-fast",
-                      "deepseek",
-                      "grok",
-                      "gemini-search",
-                      "chickytutor",
-                      "midijourney",
-                      "claude-fast",
-                      "claude",
-                      "claude-large",
-                      "claude-legacy",
-                      "perplexity-fast",
-                      "perplexity-reasoning",
-                      "kimi",
-                      "gemini-large",
-                      "gemini-legacy",
-                      "nova-fast",
-                      "glm",
-                      "minimax",
-                      "qwen-character"
-                    ]
+                    "type": "string"
                   },
                   "modalities": {
                     "type": "array",
@@ -3470,7 +3442,7 @@
                 "nova-fast",
                 "glm",
                 "minimax",
-                "qwen-character"
+                "qwen-safety"
               ]
             },
             "description": "Text model to use for generation"
@@ -3894,8 +3866,6 @@
                 "wan",
                 "klein",
                 "klein-large",
-                "imagen-4",
-                "grok-video",
                 "ltx-2"
               ]
             },

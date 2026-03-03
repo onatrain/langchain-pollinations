@@ -56,7 +56,7 @@ All four main classes also accept an explicit `api_key=` parameter on constructi
 
 ## ChatPollinations
 
-`ChatPollinations` inherits from LangChain's `BaseChatModel` and supports `invoke`, `stream`, `batch`, `ainvoke`, `astream`, `abatch`, tool calling, structured output, and multimodal messages.
+`ChatPollinations` inherits from LangChain's `BaseChatModel` and supports `invoke`, `stream`, `ainvoke`, `astream`, tool calling, structured output, and multimodal messages.
 
 ### Available text models
 
@@ -455,6 +455,8 @@ try:
 except PollinationsAPIError as e:
     if e.is_auth_error:
         print("Check your POLLINATIONS_API_KEY.")
+    elif e.is_payment_required:
+        print("Insufficient balance. Some models are for paid-only use.")
     elif e.is_validation_error:
         print(f"Bad request: {e.details}")
     elif e.is_server_error:
@@ -463,7 +465,7 @@ except PollinationsAPIError as e:
         print(e.to_dict())
 ```
 
-`PollinationsAPIError` exposes: `status_code`, `message`, `error_code`, `request_id`, `timestamp`, `details`, `cause`, and convenience properties `is_auth_error`, `is_validation_error`, `is_client_error`, `is_server_error`.
+`PollinationsAPIError` exposes: `status_code`, `message`, `error_code`, `request_id`, `timestamp`, `details`, `cause`, and convenience properties `is_auth_error`, `is_payment_required`, `is_validation_error`, `is_client_error`, `is_server_error`.
 
 ## Debug logging
 

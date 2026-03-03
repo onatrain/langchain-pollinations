@@ -38,7 +38,6 @@ from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
 from langchain_pollinations._openai_compat import (
     ChatCompletionResponse,
-    UserTier,
     lc_messages_to_openai,
     tool_to_openai_tool,
 )
@@ -1195,7 +1194,7 @@ class ChatPollinations(BaseChatModel):
         Returns:
             A ChatResult object containing generations and metadata.
         """
-        response_metadata = _response_metadata_from_response(data)
+        response_metadata = _response_metadata_from_response(cast(dict[str, Any], data))
         usage_metadata = _usage_metadata_from_usage(data.get("usage"))
 
         choices = data.get("choices", [])

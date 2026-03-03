@@ -164,7 +164,7 @@ class AccountUsageResponse(BaseModel):
     """
     Typed representation of the full JSON body returned by ``GET /account/usage``.
 
-    Wraps the list of :class:`AccountUsageRecord` objects along with the total
+    Wraps the list of `AccountUsageRecord` objects along with the total
     count of records included in the response. Unknown top-level fields are
     preserved via ``extra="allow"``.
 
@@ -255,7 +255,7 @@ class AccountInformation:
         Retrieve the account profile information synchronously.
 
         Returns:
-            An :class:`AccountProfile` instance populated with the data returned
+            An `AccountProfile` instance populated with the data returned
             by the ``GET /account/profile`` endpoint, including ``name``,
             ``email``, ``github_username``, ``image``, ``tier``, ``created_at``,
             and ``next_reset_at``.
@@ -287,8 +287,8 @@ class AccountInformation:
         Fetch detailed account usage records synchronously.
 
         When ``params.format`` is ``"json"`` (the default), the response is
-        validated and returned as an :class:`AccountUsageResponse` instance,
-        providing typed access to each :class:`AccountUsageRecord` in the
+        validated and returned as an `AccountUsageResponse` instance,
+        providing typed access to each `AccountUsageRecord` in the
         ``usage`` list and the total ``count``.
 
         When ``params.format`` is ``"csv"``, the raw CSV text is returned as a
@@ -300,7 +300,7 @@ class AccountInformation:
                 for pagination.
 
         Returns:
-            An :class:`AccountUsageResponse` for JSON responses, or a ``str``
+            An `AccountUsageResponse` for JSON responses, or a ``str``
             for CSV responses.
         """
         q = (params or AccountUsageParams()).model_dump(exclude_none=True)
@@ -333,7 +333,7 @@ class AccountInformation:
         Retrieve the account profile information asynchronously.
 
         Returns:
-            An :class:`AccountProfile` instance populated with the data returned
+            An `AccountProfile` instance populated with the data returned
             by the ``GET /account/profile`` endpoint, including ``name``,
             ``email``, ``github_username``, ``image``, ``tier``, ``created_at``,
             and ``next_reset_at``.
@@ -369,8 +369,8 @@ class AccountInformation:
         Fetch detailed account usage records asynchronously.
 
         When ``params.format`` is ``"json"`` (the default), the response is
-        validated and returned as an :class:`AccountUsageResponse` instance,
-        providing typed access to each :class:`AccountUsageRecord` in the
+        validated and returned as an `AccountUsageResponse` instance,
+        providing typed access to each `AccountUsageRecord` in the
         ``usage`` list and the total ``count``.
 
         When ``params.format`` is ``"csv"``, the raw CSV text is returned as a
@@ -382,7 +382,7 @@ class AccountInformation:
                 for pagination.
 
         Returns:
-            An :class:`AccountUsageResponse` for JSON responses, or a ``str``
+            An `AccountUsageResponse` for JSON responses, or a ``str``
             for CSV responses.
         """
         q = (params or AccountUsageParams()).model_dump(exclude_none=True)
