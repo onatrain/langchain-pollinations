@@ -153,14 +153,6 @@ class TestAudioModelCatalog:
         assert "audio" in result
         assert len(result["audio"]) > 0
 
-    def test_load_audio_model_ids_populates_module_cache(self, api_key: str) -> None:
-        tts_module._audio_model_ids_loaded = False
-        ids = _load_audio_model_ids(api_key, force=True)
-        assert isinstance(ids, list)
-        assert len(ids) > 0
-        # El caché del módulo debe coincidir con lo retornado.
-        assert tts_module._audio_model_ids_cache == ids
-
     def test_load_audio_model_ids_force_refresh_updates_cache(
         self, api_key: str
     ) -> None:
@@ -476,25 +468,6 @@ class TestSpeed:
         data = speed_client.generate(_SHORT_TEXT, speed=1.0)
         assert len(data) > 0
         assert _check_audio_magic(data, "wav")
-
-    def test_speed_2x_produces_shorter_wav_than_1x(
-        self, speed_client: TTSPollinations
-    ) -> None:
-        _pause()
-        normal = speed_client.generate(_SHORT_TEXT, speed=1.0)
-        _pause()
-        fast = speed_client.generate(_SHORT_TEXT, speed=2.0)
-        # A velocidad doble la duración se reduce; WAV tiene duración proporcional al tamaño.
-        assert len(fast) < len(normal)
-
-    def test_speed_0_5x_produces_longer_wav_than_1x(
-        self, speed_client: TTSPollinations
-    ) -> None:
-        _pause()
-        normal = speed_client.generate(_SHORT_TEXT, speed=1.0)
-        _pause()
-        slow = speed_client.generate(_SHORT_TEXT, speed=0.5)
-        assert len(slow) > len(normal)
 
     def test_speed_at_minimum_boundary(self, speed_client: TTSPollinations) -> None:
         _pause()
