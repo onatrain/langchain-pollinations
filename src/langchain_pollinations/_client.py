@@ -360,6 +360,76 @@ class PollinationsHttpClient:
         self.raise_for_status(resp)
         return resp
 
+    def post_multipart(
+        self,
+        path: str,
+        *,
+        files: dict[str, tuple[str, bytes, str]],
+        data: dict[str, str],
+    ) -> httpx.Response:
+        """
+        Execute a synchronous POST request with a multipart/form-data body.
+
+        The ``Content-Type`` header, including the multipart boundary, is set
+        automatically by httpx when ``files=`` is provided and must **not** be
+        set manually; doing so would corrupt the boundary declaration.
+
+        Args:
+            path: The API endpoint path.
+            files: Mapping of field name to a ``(filename, content, mime_type)``
+                tuple. For audio transcription this is typically
+                ``{"file": ("audio.mp3", raw_bytes, "audio/mpeg")}``.
+            data: Mapping of form field names to their string values. These
+                are sent as the non-file parts of the multipart body.
+
+        Returns:
+            The httpx Response object.
+
+        Raises:
+            PollinationsAPIError: On any non-2xx HTTP response.
+        """
+        url = f"{self._config.base_url}{path}"
+        # Solo el header Authorization; httpx gestiona Content-Type + boundary.
+        headers = self._headers()
+        resp = self._client.post(url, headers=headers, files=files, data=data)
+        self.raise_for_status(resp)
+        return resp
+
+    async def apost_multipart(
+        self,
+        path: str,
+        *,
+        files: dict[str, tuple[str, bytes, str]],
+        data: dict[str, str],
+    ) -> httpx.Response:
+        """
+        Execute an asynchronous POST request with a multipart/form-data body.
+
+        The ``Content-Type`` header, including the multipart boundary, is set
+        automatically by httpx when ``files=`` is provided and must **not** be
+        set manually; doing so would corrupt the boundary declaration.
+
+        Args:
+            path: The API endpoint path.
+            files: Mapping of field name to a ``(filename, content, mime_type)``
+                tuple. For audio transcription this is typically
+                ``{"file": ("audio.mp3", raw_bytes, "audio/mpeg")}``.
+            data: Mapping of form field names to their string values. These
+                are sent as the non-file parts of the multipart body.
+
+        Returns:
+            The httpx Response object.
+
+        Raises:
+            PollinationsAPIError: On any non-2xx HTTP response.
+        """
+        url = f"{self._config.base_url}{path}"
+        # Solo el header Authorization; httpx gestiona Content-Type + boundary.
+        headers = self._headers()
+        resp = await self._aclient.post(url, headers=headers, files=files, data=data)
+        self.raise_for_status(resp)
+        return resp
+
     def get(self, path: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
         """
         Execute a synchronous GET request to the specified path.

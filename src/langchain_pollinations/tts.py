@@ -1,7 +1,7 @@
 """
 TTS (Text-to-Speech) client for the Pollinations AI API.
 
-Provides :class:`TTSPollinations`, a configurable wrapper for the
+Provides `TTSPollinations`, a configurable wrapper for the
 ``POST /v1/audio/speech`` endpoint, with dynamic audio model catalog
 loading, full ``CreateSpeechRequest`` schema support, binary audio
 response handling, and a LangChain Runnable-compatible interface.
@@ -9,99 +9,20 @@ response handling, and a LangChain Runnable-compatible interface.
 
 from __future__ import annotations
 
-import threading
 import warnings
 from typing import Any, Literal, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
+from langchain_pollinations._audio_catalog import (
+    _audio_model_ids_cache,
+    _load_audio_model_ids,
+)
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
 
 DEFAULT_BASE_URL = "https://gen.pollinations.ai"
-
-# Modelos conocidos al momento del release; sirven de fallback si el API no responde.
-_FALLBACK_AUDIO_MODEL_IDS: list[str] = [
-    "tts-1",
-    "elevenmusic",
-]
-
-# Caché mutable del catálogo. Se inicializa con el fallback y se actualiza
-# en la primera llamada exitosa a _load_audio_model_ids().
-_audio_model_ids_cache: list[str] = list(_FALLBACK_AUDIO_MODEL_IDS)
-
-# Primitivas de sincronización: la carga remota se ejecuta a lo sumo una vez
-# por proceso, incluso en contextos multi-hilo.
-_audio_model_ids_lock: threading.Lock = threading.Lock()
-_audio_model_ids_loaded: bool = False
-
-
-def _load_audio_model_ids(
-    api_key: str | None = None,
-    *,
-    force: bool = False,
-) -> list[str]:
-    """
-    Fetch the list of available audio model IDs from the Pollinations API and
-    update the module-level cache.
-
-    The remote call is made at most once per process lifetime. Subsequent calls
-    return the cached list immediately unless ``force=True`` is passed. If the
-    API call fails for any reason (network error, missing key, etc.), the cache
-    retains its current value without raising an exception.
-
-    Args:
-        api_key: API key forwarded to ``ModelInformation``. When ``None`` the
-            value is resolved from the ``POLLINATIONS_API_KEY`` environment
-            variable. If neither is available the call fails silently and the
-            fallback list is kept.
-        force: When ``True``, bypass the one-shot guard and re-fetch from the
-            API regardless of whether a previous successful call was already
-            made. Useful for explicit catalog refreshes at runtime.
-
-    Returns:
-        A copy of the current (possibly freshly updated) audio model ID list.
-    """
-    global _audio_model_ids_cache, _audio_model_ids_loaded
-
-    # Lectura rápida fuera del lock: evita contención en el caso común
-    # (catálogo ya cargado, force=False).
-    if _audio_model_ids_loaded and not force:
-        return list(_audio_model_ids_cache)
-
-    with _audio_model_ids_lock:
-        # Segunda verificación dentro del lock (double-checked locking) para
-        # descartar la carrera entre hilos que pasaron el primer if.
-        if _audio_model_ids_loaded and not force:
-            return list(_audio_model_ids_cache)
-
-        try:
-            # Import local para evitar importaciones circulares al nivel de módulo
-            # (models.py y tts.py comparten el mismo paquete).
-            from langchain_pollinations.models import ModelInformation  # noqa: PLC0415
-
-            info = ModelInformation(api_key=api_key)
-            ids: list[str] = info.get_available_models().get("audio", [])
-
-            if ids:
-                _audio_model_ids_cache = ids
-
-        except Exception:
-            # Cualquier fallo deja el caché intacto. Se marca como intentado
-            # igualmente para no reintentar en cada instantiación.
-            pass
-
-        # Marcar como intentado siempre: evita martillar el API en entornos
-        # sin conectividad. Usar force=True para forzar un reintento explícito.
-        _audio_model_ids_loaded = True
-
-    return list(_audio_model_ids_cache)
-
-
-# Alias de tipo: documenta intención sin imponer restricción estática.
-# Usar str permite tolerar modelos nuevos sin ValidationError.
-AudioModelId = str
 
 # Formato de audio de salida; enum cerrado según la spec de la API.
 AudioFormat = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]
@@ -177,8 +98,8 @@ class TTSPollinations(BaseModel):
     All configuration fields are optional. When ``None``, a field is
     excluded from the request body and the API applies its own defaults.
     Fields set at instance level serve as per-instance defaults that can be
-    overridden on a per-call basis via :meth:`generate` / :meth:`agenerate`
-    or replaced in bulk via :meth:`with_params`.
+    overridden on a per-call basis via `generate` / `agenerate`
+    or replaced in bulk via `with_params`.
 
     Example — basic usage::
 
@@ -293,7 +214,7 @@ class TTSPollinations(BaseModel):
             **overrides: Parameter values to override in the new instance.
 
         Returns:
-            A new :class:`TTSPollinations` instance with merged configuration.
+            A new `TTSPollinations` instance with merged configuration.
         """
         merged = self.model_dump(exclude_none=False)
         merged.update(overrides)
@@ -325,7 +246,7 @@ class TTSPollinations(BaseModel):
 
         Merges instance defaults, per-call ``params``, and ``kwargs`` in
         ascending priority order, then injects the required ``input`` field
-        and validates the full payload through :class:`SpeechRequest`.
+        and validates the full payload through `SpeechRequest`.
 
         Args:
             text: The text to synthesise. Mapped to the ``input`` field.
@@ -338,7 +259,7 @@ class TTSPollinations(BaseModel):
 
         Raises:
             pydantic.ValidationError: If the merged parameters fail
-                :class:`SpeechRequest` validation (e.g. ``speed`` out of range).
+                `SpeechRequest` validation (e.g. ``speed`` out of range).
         """
         merged: dict[str, Any] = {}
         # Defaults de instancia como base de la mezcla.
@@ -360,7 +281,7 @@ class TTSPollinations(BaseModel):
         Execute a synchronous POST request to the TTS endpoint and return the
         raw HTTP response.
 
-        Use :meth:`generate` to receive the audio bytes directly.
+        Use `generate` to receive the audio bytes directly.
 
         Args:
             text: The text to synthesise.
@@ -368,7 +289,7 @@ class TTSPollinations(BaseModel):
             **kwargs: Additional per-call overrides as keyword arguments.
 
         Returns:
-            The raw :class:`httpx.Response` from the API. The response body
+            The raw `httpx.Response` from the API. The response body
             contains binary audio in the format requested via ``response_format``.
 
         Raises:
@@ -384,7 +305,7 @@ class TTSPollinations(BaseModel):
         Execute an asynchronous POST request to the TTS endpoint and return
         the raw HTTP response.
 
-        Use :meth:`agenerate` to receive the audio bytes directly.
+        Use `agenerate` to receive the audio bytes directly.
 
         Args:
             text: The text to synthesise.
@@ -392,7 +313,7 @@ class TTSPollinations(BaseModel):
             **kwargs: Additional per-call overrides as keyword arguments.
 
         Returns:
-            The raw :class:`httpx.Response` from the API. The response body
+            The raw `httpx.Response` from the API. The response body
             contains binary audio in the format requested via ``response_format``.
 
         Raises:
@@ -454,7 +375,7 @@ class TTSPollinations(BaseModel):
             input: The text to synthesise.
             config: Optional LangChain ``RunnableConfig`` (unused).
             **kwargs: Additional generation parameters forwarded to
-                :meth:`generate`.
+                `generate`.
 
         Returns:
             The binary audio content produced by the API.
@@ -474,7 +395,7 @@ class TTSPollinations(BaseModel):
             input: The text to synthesise.
             config: Optional LangChain ``RunnableConfig`` (unused).
             **kwargs: Additional generation parameters forwarded to
-                :meth:`agenerate`.
+                `agenerate`.
 
         Returns:
             The binary audio content produced by the API.

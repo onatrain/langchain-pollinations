@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 import typing
 import warnings
 from contextlib import contextmanager
@@ -15,12 +14,15 @@ import langchain_pollinations.tts as tts_module
 from langchain_pollinations.tts import (
     DEFAULT_BASE_URL,
     AudioFormat,
-    AudioModelId,
     SpeechRequest,
     TTSPollinations,
     VoiceId,
+)
+from langchain_pollinations._audio_catalog import (
+    AudioModelId,
     _FALLBACK_AUDIO_MODEL_IDS,
     _load_audio_model_ids,
+    _audio_model_ids_loaded,
 )
 
 
@@ -118,173 +120,6 @@ class TestFallbackList:
 
     def test_is_non_empty(self) -> None:
         assert len(_FALLBACK_AUDIO_MODEL_IDS) > 0
-
-
-class TestLoadAudioModelIds:
-    def test_returns_list_copy_not_same_object(self) -> None:
-        tts_module._audio_model_ids_loaded = True
-        result = _load_audio_model_ids()
-        assert result is not tts_module._audio_model_ids_cache
-
-    def test_returns_cached_when_already_loaded_without_calling_api(self) -> None:
-        tts_module._audio_model_ids_cache = ["cached-model"]
-        tts_module._audio_model_ids_loaded = True
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            result = _load_audio_model_ids()
-        mock_cls.assert_not_called()
-        assert result == ["cached-model"]
-
-    def test_fetches_from_api_on_first_call(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["openai-audio", "tts-1"],
-                "text": [],
-                "image": [],
-            }
-            result = _load_audio_model_ids("sk-test")
-        assert result == ["openai-audio", "tts-1"]
-
-    def test_updates_cache_after_successful_api_call(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["new-model"],
-                "text": [],
-                "image": [],
-            }
-            _load_audio_model_ids()
-        assert tts_module._audio_model_ids_cache == ["new-model"]
-
-    def test_sets_loaded_flag_after_successful_api_call(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["m1"],
-                "text": [],
-                "image": [],
-            }
-            _load_audio_model_ids()
-        assert tts_module._audio_model_ids_loaded is True
-
-    def test_does_not_update_cache_when_api_returns_empty_list(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        original_cache = list(tts_module._audio_model_ids_cache)
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": [],
-                "text": [],
-                "image": [],
-            }
-            _load_audio_model_ids()
-        assert tts_module._audio_model_ids_cache == original_cache
-
-    def test_silently_keeps_cache_on_api_failure(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        original_cache = list(tts_module._audio_model_ids_cache)
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.side_effect = RuntimeError("network error")
-            result = _load_audio_model_ids()
-        assert result == original_cache
-        assert tts_module._audio_model_ids_cache == original_cache
-
-    def test_sets_loaded_flag_even_on_api_failure(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.side_effect = Exception("boom")
-            _load_audio_model_ids()
-        assert tts_module._audio_model_ids_loaded is True
-
-    def test_force_bypasses_one_shot_guard_and_re_fetches(self) -> None:
-        tts_module._audio_model_ids_loaded = True
-        tts_module._audio_model_ids_cache = ["stale-model"]
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["fresh-model"],
-                "text": [],
-                "image": [],
-            }
-            result = _load_audio_model_ids(force=True)
-        assert result == ["fresh-model"]
-        assert tts_module._audio_model_ids_cache == ["fresh-model"]
-
-    def test_force_does_not_reset_loaded_flag_to_false(self) -> None:
-        tts_module._audio_model_ids_loaded = True
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["m1"],
-                "text": [],
-                "image": [],
-            }
-            _load_audio_model_ids(force=True)
-        assert tts_module._audio_model_ids_loaded is True
-
-    def test_passes_api_key_to_model_information(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["m1"],
-                "text": [],
-                "image": [],
-            }
-            _load_audio_model_ids("my-api-key")
-        mock_cls.assert_called_once_with(api_key="my-api-key")
-
-    def test_passes_none_api_key_when_not_provided(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.side_effect = Exception("irrelevant")
-            _load_audio_model_ids()
-        mock_cls.assert_called_once_with(api_key=None)
-
-    def test_thread_safety_api_called_at_most_once(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["threaded-model"],
-                "text": [],
-                "image": [],
-            }
-
-            threads = [threading.Thread(target=_load_audio_model_ids) for _ in range(10)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            # El lock garantiza que ModelInformation se instancie exactamente una vez.
-            assert mock_cls.call_count == 1
-
-    def test_thread_safety_flag_set_after_concurrent_calls(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["m1"],
-                "text": [],
-                "image": [],
-            }
-            threads = [threading.Thread(target=_load_audio_model_ids) for _ in range(5)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-        assert tts_module._audio_model_ids_loaded is True
-
-    def test_second_call_without_force_skips_api(self) -> None:
-        tts_module._audio_model_ids_loaded = False
-        with patch("langchain_pollinations.models.ModelInformation") as mock_cls:
-            mock_cls.return_value.get_available_models.return_value = {
-                "audio": ["m1"],
-                "text": [],
-                "image": [],
-            }
-            _load_audio_model_ids()
-            _load_audio_model_ids()
-        # Segunda llamada no debe reinvocar la API.
-        assert mock_cls.call_count == 1
 
 
 class TestPublicTypes:
