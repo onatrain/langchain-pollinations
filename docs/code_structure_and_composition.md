@@ -6,25 +6,35 @@ The library is organized within the `langchain_pollinations` package, exposing a
 
 ```text
 langchain_pollinations/
-  __init__.py              -> Exports the public API: main classes, account types, and error types.
-  chat.py                  -> ChatPollinations (BaseChatModel), ChatPollinationsConfig, dynamic 
+  __init__.py              -> Exports the public API: main classes, account types,
+                              audio response types, and error types.
+  chat.py                  -> ChatPollinations (BaseChatModel), ChatPollinationsConfig, dynamic
                               text model catalog, SSE helpers, and response parsing.
-  image.py                 -> ImagePollinations (BaseModel), ImagePromptParams, and dynamic 
-                              image model catalog.
-  account.py               -> AccountInformation (dataclass), Pydantic response models 
-                              (AccountProfile, AccountUsageRecord, AccountUsageResponse), and 
+  image.py                 -> ImagePollinations (BaseModel + Runnable), ImagePromptParams,
+                              and dynamic image model catalog.
+  tts.py                   -> TTSPollinations (BaseModel + Runnable), SpeechRequest,
+                              AudioFormat, VoiceId, and TTS request building.
+  stt.py                   -> STTPollinations (BaseModel + Runnable), TranscriptionParams,
+                              TranscriptionResponse, TranscriptionFormat, AudioInputFormat,
+                              multipart construction and response parsing.
+  account.py               -> AccountInformation (dataclass), Pydantic response models
+                              (AccountProfile, AccountUsageRecord, AccountUsageResponse), and
                               query parameters (AccountUsageParams, AccountUsageDailyParams).
-  models.py                -> ModelInformation (dataclass), lists text and image models.
-  _auth.py                 -> AuthConfig (frozen dataclass): API key resolution from argument 
+  models.py                -> ModelInformation (dataclass), lists text, image, and audio models.
+  _audio_catalog.py        -> Shared audio model catalog: module-level cache, threading
+                              primitives, _load_audio_model_ids(), and AudioModelId alias.
+                              Used by both tts.py and stt.py.
+  _auth.py                 -> AuthConfig (frozen dataclass): API key resolution from argument
                               or environment variable.
-  _client.py               -> PollinationsHttpClient: httpx sync/async wrapper, structured 
-                              error handling, and logging with credential redaction.
-  _errors.py               -> PollinationsError (base) and PollinationsAPIError (slots dataclass): 
+  _client.py               -> PollinationsHttpClient: httpx sync/async wrapper, structured
+                              error handling, JSON POST, multipart POST, GET, streaming,
+                              and logging with credential redaction.
+  _errors.py               -> PollinationsError (base) and PollinationsAPIError (slots dataclass):
                               exception hierarchy with structured fields from the JSON envelope.
-  _sse.py                  -> Minimalist Server-Sent Events parser for text blocks. 
+  _sse.py                  -> Minimalist Server-Sent Events parser for text blocks.
                               Exposes SSEEvent and iter_sse_events_from_text.
-  _openai_compat.py        -> Request/response TypedDicts, normalization for multimodal 
-                              content parts (audio, video, file, thinking), and conversion 
+  _openai_compat.py        -> Request/response TypedDicts, normalization for multimodal
+                              content parts (audio, video, file, thinking), and conversion
                               of LangChain messages → OpenAI, tool_to_openai_tool.
 ```
 
@@ -37,6 +47,8 @@ __all__ = [
     # Main classes
     "ChatPollinations",
     "ImagePollinations",
+    "TTSPollinations",
+    "STTPollinations",
     "AccountInformation",
     "ModelInformation",
     # Account types (exported to facilitate response typing)
@@ -44,12 +56,16 @@ __all__ = [
     "AccountTier",
     "AccountUsageRecord",
     "AccountUsageResponse",
+    # Audio response and format types (exported to facilitate response typing)
+    "AudioInputFormat",
+    "TranscriptionFormat",
+    "TranscriptionResponse",
     # Exceptions
     "PollinationsAPIError",
 ]
 ```
 
-Modules with an underscore prefix (`_client.py`, `_auth.py`, `_sse.py`, `_openai_compat.py`, `_errors.py`) are exclusively for internal use. They encapsulate HTTP transport, authentication, SSE parsing, multimodal content normalization, and the error hierarchy.
+Modules with an underscore prefix (`_client.py`, `_auth.py`, `_sse.py`, `_openai_compat.py`, `_errors.py`, `_audio_catalog.py`) are exclusively for internal use. They encapsulate HTTP transport, authentication, SSE parsing, multimodal content normalization, the error hierarchy, and the shared audio model catalog. They are invisible to the end user by naming convention and are absent from `__all__`.
 
 ## 3) Composition by Responsibilities
 
@@ -122,7 +138,7 @@ Modules with an underscore prefix (`_client.py`, `_auth.py`, `_sse.py`, `_openai
 
 `to_query()` calls `model_dump(by_alias=True, exclude_none=True)` to produce the query string dict.
 
-**`ImagePollinations`** — inherits from `BaseModel` (`arbitrary_types_allowed=True`, `extra="forbid"`, `populate_by_name=True`). All `ImagePromptParams` fields are present as `Optional` with a `None` default (the effective default is set by `ImagePromptParams` when building the query). The HTTP client is stored in `_http: PollinationsHttpClient = PrivateAttr()`.
+**`ImagePollinations`** — inherits from `BaseModel` + `Runnable[str, bytes]` (`arbitrary_types_allowed=True`, `extra="forbid"`, `populate_by_name=True`). All `ImagePromptParams` fields are present as `Optional` with a `None` default (the effective default is set by `ImagePromptParams` when building the query). The HTTP client is stored in `_http: PollinationsHttpClient = PrivateAttr()`.
 
 Public methods:
 
@@ -151,19 +167,131 @@ Public methods:
 
 *`AccountInformation`* (`@dataclass(slots=True)`) — account client. `__post_init__` initializes `PollinationsHttpClient` with `AuthConfig`. The static method `_parse_response(response)` discriminates JSON vs. CSV via the `Content-Type` header. `get_profile()` and `aget_profile()` return `AccountProfile` (via `model_validate`). `get_usage()` and `aget_usage()` return `AccountUsageResponse` for JSON and `str` for CSV.
 
-**`models.py`** — `ModelInformation` (`@dataclass(slots=True)`). The static method `_extract_model_ids(models_data)` extracts IDs from items searching in order: `id`, `model`, `name`. `get_available_models()` and `aget_available_models()` orchestrate calls to text + image models, catching individual exceptions to return the partial list that is available.
+**`models.py`** — `ModelInformation` (`@dataclass(slots=True)`). The static method `_extract_model_ids(models_data)` extracts IDs from items searching in order: `id`, `model`, `name`. `get_available_models()` and `aget_available_models()` orchestrate parallel calls to text, image, and audio model endpoints, catching individual exceptions to return the partial set that is available. The returned dict has three keys: `"text"`, `"image"`, and `"audio"`.
 
-### 3.4 Transport and Security (`_client.py`, `_auth.py`)
+*Methods on `ModelInformation`*:
+
+| Method | Endpoint | Returns |
+|---|---|---|
+| `list_text_models()` | `GET /text/models` | `list[dict] \| dict` |
+| `list_image_models()` | `GET /image/models` | `list[dict] \| dict` |
+| `list_audio_models()` | `GET /audio/models` | `list[dict] \| dict` |
+| `list_compatible_models()` | `GET /v1/models` | `dict` |
+| `get_available_models()` | all three above | `dict[str, list[str]]` |
+| `alist_*` / `aget_*` | same, async | same returns |
+
+### 3.4 TTS (`tts.py`)
+
+**Module-level type aliases:**
+- `AudioFormat = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]` — closed enum matching the API spec.
+- `VoiceId = str` — open string type to tolerate future voice additions without `ValidationError`.
+
+**`SpeechRequest`** — Pydantic model (`extra="forbid"`, `populate_by_name=True`) that mirrors the `CreateSpeechRequest` OpenAPI schema for `POST /v1/audio/speech`:
+
+| Field | Default | Constraint | Notes |
+|---|---|---|---|
+| `input` | required | `minlength=1, maxlength=4096` | Text to synthesise. |
+| `model` | `None` | — | `None` defers to API default. |
+| `voice` | `"alloy"` | — | Open `VoiceId` type. |
+| `response_format` | `"mp3"` | `AudioFormat` | Closed enum. |
+| `speed` | `1.0` | `0.25`–`4.0` | Playback speed multiplier. |
+| `duration` | `None` | `3.0`–`300.0` | `elevenmusic` only; omitted when `None`. |
+| `instrumental` | `None` | — | `elevenmusic` only; omitted when `None`. |
+
+`to_body()` calls `model_dump(exclude_none=True)`, silently omitting model-specific optional fields when they are `None`.
+
+**`TTSPollinations`** — inherits from `BaseModel` + `Runnable[str, bytes]` (`arbitrary_types_allowed=True`, `extra="forbid"`, `populate_by_name=True`). All `SpeechRequest` fields except `input` are present as `Optional` with `None` defaults. The HTTP client is stored in `_http: PollinationsHttpClient = PrivateAttr()`.
+
+Internal helpers:
+
+| Method | Description |
+|---|---|
+| `_defaults_dict()` | Collects only non-`None` instance-level fields into a base dict. |
+| `_build_body(text, params, kwargs)` | Three-layer merge: instance defaults → per-call `params` → per-call `kwargs`. Injects `input=text` last (cannot be overridden). Validates via `SpeechRequest` and returns `to_body()`. |
+
+Public methods:
+
+| Method | Type | Return | Description |
+|---|---|---|---|
+| `generate(text, *, params, **kwargs)` | sync | `bytes` | Synthesises text and returns audio bytes. |
+| `agenerate(text, *, params, **kwargs)` | async | `bytes` | Async version. |
+| `generate_response(text, *, params, **kwargs)` | sync | `httpx.Response` | Returns the raw HTTP response. |
+| `agenerate_response(text, *, params, **kwargs)` | async | `httpx.Response` | Async version. |
+| `invoke(input, config, **kwargs)` | sync | `bytes` | LangChain Runnable compatibility. |
+| `ainvoke(input, config, **kwargs)` | async | `bytes` | Async version. |
+| `with_params(**overrides)` | — | `TTSPollinations` | New instance with merged config; `api_key` re-injected. |
+
+### 3.5 STT (`stt.py`)
+
+**Module-level type aliases and constants:**
+- `AudioInputFormat = Literal["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"]` — accepted input audio formats.
+- `TranscriptionFormat = Literal["json", "text", "srt", "verbose_json", "vtt"]` — accepted output formats.
+- `_AUDIO_MIME_TYPES: dict[str, str]` — maps file extensions to MIME type strings (e.g., `"mp3"` → `"audio/mpeg"`, `"wav"` → `"audio/wav"`).
+
+**`TranscriptionResponse`** — Pydantic model (`extra="allow"`). Declares only `text: str`. When `response_format="verbose_json"`, additional Whisper fields (`language`, `duration`, `segments`, `words`) are preserved transparently in `model_extra`.
+
+**`TranscriptionParams`** — Pydantic model (`extra="forbid"`) that carries the non-file form fields for `POST /v1/audio/transcriptions`:
+
+| Field | Default | Constraint | Notes |
+|---|---|---|---|
+| `model` | `None` | — | `None` defers to `whisper-large-v3`. |
+| `language` | `None` | — | ISO-639-1; `None` enables auto-detection. |
+| `prompt` | `None` | — | Context hint for transcription. |
+| `response_format` | `None` | `TranscriptionFormat` | `None` defers to `"json"`. |
+| `temperature` | `None` | `0.0`–`1.0` | Sampling temperature. |
+
+`to_form_data()` calls `model_dump(exclude_none=True)` and casts all values to `str` (required by httpx's multipart form interface).
+
+**`STTPollinations`** — inherits from `BaseModel` + `Runnable[bytes, TranscriptionResponse | str]` (`arbitrary_types_allowed=True`, `extra="forbid"`, `populate_by_name=True`). All `TranscriptionParams` fields are present as `Optional` with `None` defaults. Additionally exposes `file_name: str = "audio.mp3"` as an instance-level default that determines the MIME type sent in the multipart body. The HTTP client is stored in `_http: PollinationsHttpClient = PrivateAttr()`.
+
+Internal helpers:
+
+| Method | Description |
+|---|---|
+| `_defaults_dict()` | Collects non-`None` instance fields including `file_name`. |
+| `_mime_type_for(filename)` | Extracts extension, lowercases it, looks it up in `_AUDIO_MIME_TYPES`; falls back to `application/octet-stream`. |
+| `_build_multipart(audio, params, kwargs)` | Three-layer merge: instance defaults → per-call `params` → per-call `kwargs`. Pops `file_name` before `TranscriptionParams` validation (`extra="forbid"` rejects unknown fields). Returns `(files_dict, form_data, params_obj)`. |
+| `_parse_transcription_response(resp, response_format)` | Driven by actual `Content-Type` header. `application/json` → `TranscriptionResponse.model_validate(resp.json())`. Non-JSON → `resp.text`. |
+
+Public methods:
+
+| Method | Type | Return | Description |
+|---|---|---|---|
+| `transcribe(audio, *, params, **kwargs)` | sync | `TranscriptionResponse \| str` | Transcribes audio and returns parsed response. |
+| `atranscribe(audio, *, params, **kwargs)` | async | `TranscriptionResponse \| str` | Async version. |
+| `transcribe_response(audio, *, params, **kwargs)` | sync | `httpx.Response` | Returns the raw HTTP response. |
+| `atranscribe_response(audio, *, params, **kwargs)` | async | `httpx.Response` | Async version. |
+| `invoke(input, config, **kwargs)` | sync | `TranscriptionResponse \| str` | LangChain Runnable compatibility. |
+| `ainvoke(input, config, **kwargs)` | async | `TranscriptionResponse \| str` | Async version. |
+| `with_params(**overrides)` | — | `STTPollinations` | New instance with merged config; `api_key` re-injected. |
+
+### 3.6 Audio Catalog (`_audio_catalog.py`)
+
+Dedicated internal module that supplies the shared audio model catalog state consumed by both `tts.py` and `stt.py`. Factoring it out avoids duplicating module-level state and prevents an asymmetric import dependency between two sibling modules that need the same data.
+
+**Exported names** (designed for explicit per-name imports so unit tests can patch individual pieces in isolation):
+- `AudioModelId = str` — type alias documenting intent without imposing static restriction.
+- `_FALLBACK_AUDIO_MODEL_IDS: list[str]` — static list used as initial cache value and as the silent-failure fallback. Covers both TTS and STT models: `openai-audio`, `tts-1`, `elevenlabs`, `elevenmusic`, `whisper-large-v3`, `whisper-1`, `scribe`.
+- `_audio_model_ids_cache: list[str]` — mutable module-level cache, initialized from the fallback.
+- `_audio_model_ids_lock: threading.Lock` — guards the one-shot load.
+- `_audio_model_ids_loaded: bool` — one-shot guard flag.
+- `_load_audio_model_ids(api_key, *, force)` — double-checked locking loader; calls `ModelInformation.get_available_models()["audio"]` and updates `_audio_model_ids_cache`. Import of `ModelInformation` is deferred (local import) to avoid circular dependency at module level.
+
+### 3.7 Transport and Security (`_client.py`, `_auth.py`)
 
 **`_client.py`**:
 - `HttpConfig` (frozen dataclass, slots) — `base_url` and `timeout_s`.
 - `_parse_error_response(status_code, body_text, content_type)` — free function that parses the API error envelope `{status, success, error: {code, message, requestId, timestamp, details, cause}}` into a `PollinationsAPIError`. It only attempts to parse JSON if `Content-Type` contains `application/json`.
-- `PollinationsHttpClient` — encapsulates an `httpx.Client` (sync) and an `httpx.AsyncClient` (async), both configured with logging event hooks. The `_log_request` / `_log_response_sync` hooks and their async variants redact the `Authorization` header before writing to logs. The `raise_for_status(resp)` method calls `_parse_error_response` and raises the structured error. Exposes `post_json`, `apost_json`, `get`, `aget`, `stream_post_json`, `astream_post_json`.
+- `PollinationsHttpClient` — encapsulates an `httpx.Client` (sync) and an `httpx.AsyncClient` (async), both configured with logging event hooks. The `_log_request` / `_log_response_sync` hooks and their async variants redact the `Authorization` header before writing to logs. The `raise_for_status(resp)` method calls `_parse_error_response` and raises the structured error. Exposes:
+  - `post_json`, `apost_json` — JSON POST for chat completions and TTS.
+  - `post_multipart`, `apost_multipart` — multipart/form-data POST for audio transcriptions; `Content-Type` + boundary are managed by httpx automatically (must not be set manually).
+  - `get`, `aget` — parametrized GET for image generation and catalog endpoints.
+  - `stream_post_json`, `astream_post_json` — streaming context managers for SSE responses.
 
 **`_auth.py`**:
 - `AuthConfig` (frozen dataclass, slots) — one `api_key: str` field. The `from_env_or_value(api_key)` factory resolves the key from the argument or `POLLINATIONS_API_KEY`; it raises a `ValueError` if neither is available.
 
-### 3.5 Exceptions (`_errors.py`)
+### 3.8 Exceptions (`_errors.py`)
 
 Class hierarchy:
 
@@ -175,7 +303,7 @@ RuntimeError
 
 `PollinationsAPIError` carries: `status_code`, `message`, `body`, `error_code`, `request_id`, `timestamp`, `details`, `cause`. Derived properties: `is_client_error`, `is_server_error`, `is_auth_error`, `is_validation_error`, `is_payment_required` (verifies `status_code == 402` **or** `error_code == "PAYMENT_REQUIRED"` to cover the defensive case where the gateway forwards the code with an atypical status). The `to_dict()` method serializes all fields for structured logging.
 
-### 3.6 SSE Parser (`_sse.py`)
+### 3.9 SSE Parser (`_sse.py`)
 
 Contains `SSEEvent` (frozen dataclass, slots) and `iter_sse_events_from_text(text)`, a minimalist parser that splits blocks by `\n\n` and extracts `data:` lines. It is used for processing SSE responses in full text format (not line-by-line streaming). Real-time streaming in `ChatPollinations` uses the inline helpers `_iter_sse_json_events_sync` / `_iter_sse_json_events_async` defined in `chat.py`, which consume `iter_lines()` / `aiter_lines()` directly from the `httpx` response.
 
@@ -232,9 +360,62 @@ User: for chunk in llm.stream([...])
   └─ Returns Iterator[AIMessageChunk]
 ```
 
-## 5) Dynamic Model Catalogs
+## 5) Data Flow — Audio
 
-Both `chat.py` and `image.py` implement the same pattern for lazy model loading:
+### 5.1 TTS Flow (`TTSPollinations.generate`)
+
+```
+User: tts.generate("Hello, world!")
+  │
+  ├─ TTSPollinations.generate(text, *, params, **kwargs)
+  │    ├─ _build_body(text, params, kwargs)
+  │    │    ├─ _defaults_dict()                     # instance-level defaults
+  │    │    ├─ merge: defaults → params → kwargs
+  │    │    ├─ inject input=text (final precedence)
+  │    │    ├─ SpeechRequest(**merged)              # Pydantic validation
+  │    │    └─ SpeechRequest.to_body()             # model_dump(exclude_none=True)
+  │    │
+  │    ├─ PollinationsHttpClient.post_json(         # _client.py
+  │    │       "/v1/audio/speech", body)
+  │    │    └─ raise_for_status() → PollinationsAPIError if error
+  │    │
+  │    └─ response.content
+  │
+  └─ Returns bytes  (raw audio: mp3 / opus / aac / flac / wav / pcm)
+```
+
+### 5.2 STT Flow (`STTPollinations.transcribe`)
+
+```
+User: stt.transcribe(audio_bytes)
+  │
+  ├─ STTPollinations.transcribe(audio, *, params, **kwargs)
+  │    ├─ _build_multipart(audio, params, kwargs)
+  │    │    ├─ _defaults_dict()                     # instance-level defaults incl. file_name
+  │    │    ├─ merge: defaults → params → kwargs
+  │    │    ├─ pop file_name (extra="forbid" in TranscriptionParams)
+  │    │    ├─ TranscriptionParams(**merged)        # Pydantic validation
+  │    │    ├─ TranscriptionParams.to_form_data()  # model_dump + cast to str
+  │    │    ├─ _mime_type_for(file_name)            # extension → MIME lookup
+  │    │    └─ files_dict = {"file": (file_name, audio, mime_type)}
+  │    │
+  │    ├─ PollinationsHttpClient.post_multipart(    # _client.py
+  │    │       "/v1/audio/transcriptions",
+  │    │       files=files_dict, data=form_data)
+  │    │    └─ raise_for_status() → PollinationsAPIError if error
+  │    │
+  │    └─ _parse_transcription_response(resp, response_format)
+  │         ├─ Content-Type: application/json
+  │         │    └─ TranscriptionResponse.model_validate(resp.json())
+  │         └─ other Content-Type
+  │              └─ resp.text  (plain str for text/srt/vtt)
+  │
+  └─ Returns TranscriptionResponse | str
+```
+
+## 6) Dynamic Model Catalogs
+
+All three model catalogs (text, image, audio) implement the same pattern for lazy, thread-safe, one-shot remote loading:
 
 ```python
 # Module variables
@@ -260,9 +441,19 @@ def _load_xxx_model_ids(api_key, *, force=False) -> list[str]:
     return list(_xxx_model_ids_cache)
 ```
 
-The loading is performed **at most once per process** during the first instantiation of `ChatPollinations` or `ImagePollinations`. The `ModelInformation` import is local (inside the function) to avoid circular imports between `chat.py`/`image.py` and `models.py`.
+The loading is performed **at most once per process** during the first instantiation of `ChatPollinations`, `ImagePollinations`, `TTSPollinations`, or `STTPollinations`. The `ModelInformation` import is local (inside the function) to avoid circular imports between the respective modules and `models.py`.
 
-## 6) Multimodal Type Management
+**Catalog location by module:**
+
+| Catalog | Module | Endpoint | Consumed by |
+|---|---|---|---|
+| Text model IDs | `chat.py` (inline) | `GET /text/models` | `ChatPollinations` |
+| Image model IDs | `image.py` (inline) | `GET /image/models` | `ImagePollinations` |
+| Audio model IDs | `_audio_catalog.py` (shared) | `GET /audio/models` | `TTSPollinations`, `STTPollinations` |
+
+The audio catalog is factored into its own module because two independent sibling modules (`tts.py` and `stt.py`) share the same cache state. Inlining it in either one would create an asymmetric dependency between the two.
+
+## 7) Multimodal Type Management
 
 ### Input Content Parts (Request)
 
@@ -281,7 +472,7 @@ ContentBlock = (
 
 `_normalize_content_part` removes the `id` field from all parts (rejected by the gateway), normalizes flat variants of `input_audio`, `video_url`, and `file` to their canonical forms, and rewrites the `"audio"` type as `"input_audio"` for compatibility with external SDKs.
 
-### Response Types (Response)
+### Response Types (Chat Response)
 
 | TypedDict | Module | Key Fields |
 |---|---|---|
@@ -293,7 +484,17 @@ ContentBlock = (
 
 `UserTier = Literal["anonymous", "spore", "seed", "flower", "nectar"]` is the type for the `user_tier` field in the root response; it is exposed in `AIMessage` `response_metadata`.
 
-## 7) Tool Calling Management
+### Audio Types (TTS and STT)
+
+| Type | Module | Notes |
+|---|---|---|
+| `AudioFormat` | `tts.py` | Closed `Literal` for TTS output encoding: `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`. |
+| `VoiceId` | `tts.py` | Open `str` alias; 34 known voices at release time. |
+| `AudioInputFormat` | `stt.py` | Closed `Literal` for accepted input audio file extensions: `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, `webm`. |
+| `TranscriptionFormat` | `stt.py` | Closed `Literal` for transcription output format: `json`, `text`, `srt`, `verbose_json`, `vtt`. |
+| `TranscriptionResponse` | `stt.py` | Pydantic (`extra="allow"`); declares only `text: str`; verbose JSON extras land in `model_extra`. |
+
+## 8) Tool Calling Management
 
 The full tool calling flow passes through three points in the code:
 
@@ -305,9 +506,10 @@ The full tool calling flow passes through three points in the code:
 
 Inverse normalization in `lc_messages_to_openai` converts `AIMessage.tool_calls` + `invalid_tool_calls` back to OpenAI format using `_lc_tool_call_to_openai_tool_call`. The `name` field is omitted in `ToolMessage` (documented provider gateway incompatibility).
 
-## 8) Threading and Async Considerations
+## 9) Threading and Async Considerations
 
-- `PollinationsHttpClient` maintains independent `httpx.Client` (sync) and `httpx.AsyncClient` (async) instances. They are not shared thread-safe; each public class instance has its own client.
-- Model catalogs (`_text_model_ids_cache`, `_image_model_ids_cache`) are module variables protected by `threading.Lock` and double-checked locking, being the only shared state between instances.
-- `ChatPollinations` uses `contextlib.suppress` (imported as `contextlib`) in places where parsing exceptions should not interrupt the streaming flow.
-- `AccountInformation` and `ModelInformation` methods have no shared state between calls; they are stateless except for the `_http` configuration.
+- **Shared State is Module-Level, Not Instance-Level**: All three model catalogs are stored as module-level variables (`_xxx_model_ids_cache`, `_xxx_model_ids_loaded`, `_xxx_model_ids_lock`). Multiple instances of `ChatPollinations`, `ImagePollinations`, `TTSPollinations`, or `STTPollinations` within the same process share the same underlying cache without any instance-to-instance coordination required.
+- **No Event Loop Coupling**: `PollinationsHttpClient` instantiates both `httpx.Client` and `httpx.AsyncClient` eagerly in `__init__`. Async methods simply call `await self._aclient.post(...)` etc. There is no `asyncio.get_event_loop()` call or manual loop management in the library; coroutines are always run by the caller's event loop.
+- **`PrivateAttr` for httpx Clients**: All Pydantic-based classes store the HTTP client in a `PrivateAttr`. This keeps the transport object outside Pydantic's field schema, preventing serialization, validation, or repr exposure of the internal `httpx` handles.
+- **Async Streaming vs. Async Non-Streaming**: `ChatPollinations` uses `stream_post_json` / `astream_post_json` (which return `httpx` stream context managers) only for the streaming path. All other endpoints (`post_json`, `post_multipart`, `get`) buffer the full response before returning, which is appropriate for their payload sizes (JSON, audio bytes, images).
+- **Multipart and Thread Safety**: `post_multipart` and `apost_multipart` in `PollinationsHttpClient` use the respective sync and async clients. They are subject to the same thread-safety guarantees as all other methods: `httpx.Client` is safe for concurrent use across threads; `httpx.AsyncClient` must be used only within the event loop that created it.
