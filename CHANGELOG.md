@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Beta]
 
+### [0.2.6b3] - 2026-03-08
+
+#### Fixed
+- ImagePollinations correctly inherits from langchain_core.runnables.Runnable
+
 ### [0.2.6b2] - 2026-03-07
 
 #### Fixed
