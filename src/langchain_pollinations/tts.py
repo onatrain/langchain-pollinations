@@ -14,10 +14,12 @@ from typing import Any, Literal, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
+from langchain_core.runnables import Runnable
 
 from langchain_pollinations._audio_catalog import (
     _audio_model_ids_cache,
     _load_audio_model_ids,
+    _audio_model_ids_loaded,  # noqa: F401
 )
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
@@ -87,7 +89,7 @@ class SpeechRequest(BaseModel):
         return self.model_dump(exclude_none=True)
 
 
-class TTSPollinations(BaseModel):
+class TTSPollinations(BaseModel, Runnable[str, bytes]):
     """
     Configurable client for the Pollinations Text-to-Speech endpoint.
 
@@ -134,6 +136,9 @@ class TTSPollinations(BaseModel):
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", populate_by_name=True)
+
+    # Requerido por Runnable: identificador opcional del runnable para logs y trazas LC.
+    name: Optional[str] = None
 
     # --- Auth / transporte ---
     api_key: Optional[str] = Field(default=None, exclude=True, repr=False)
