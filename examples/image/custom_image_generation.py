@@ -6,10 +6,10 @@ dotenv.load_dotenv()
 prompt = "a funky painted, vivid coloured Volkswagen Beetle in middle of a desert at day, photorealistic image"
 
 params = {
-    "model": "klein-large",   # prueba: flux, zimage, turbo, kontext, seedream, gptimage, etc.
+    "model": "grok-imagine",   # prueba: flux, zimage, turbo, kontext, seedream, gptimage, etc.
     "width": 1024,
     "height": 576,
-    "seed": -1,
+    "seed": 10,
     "enhance": True,
     "negative_prompt": "worst quality, blurry, lowres, artifacts",
     "safe": False,
