@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
+from langchain_core.runnables import Runnable
 
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
@@ -167,13 +168,16 @@ class ImagePromptParams(BaseModel):
         return self.model_dump(by_alias=True, exclude_none=True)
 
 
-class ImagePollinations(BaseModel):
+class ImagePollinations(BaseModel, Runnable[str, bytes]):
     """
     Configurable wrapper for the Pollinations image generation endpoint.
     Supports both synchronous and asynchronous operations with LangChain integration.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", populate_by_name=True)
+
+    # Requerido por Runnable: identificador opcional del runnable para logs y trazas LC.
+    name: Optional[str] = None
 
     # Auth / transporte
     api_key: Optional[str] = Field(default=None, exclude=True, repr=False)

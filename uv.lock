@@ -1071,7 +1071,7 @@ wheels = [
 
 [[package]]
 name = "langchain-pollinations"
-version = "0.2.6b1"
+version = "0.2.6b2"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

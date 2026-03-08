@@ -3,7 +3,7 @@ from langchain_pollinations.image import ImagePollinations
 
 dotenv.load_dotenv()
 
-prompt = "combine the images creating a cool composition in anime style"
+prompt = "combine the images putting the tiger resting in front of the house door, in anime style"
 
 url1 = "https://i.ibb.co/vvrkV5Xf/tigre.jpg"
 url2 = "https://i.ibb.co/qMN4Lhh8/casita.jpg"
@@ -11,7 +11,7 @@ url2 = "https://i.ibb.co/qMN4Lhh8/casita.jpg"
 REFERENCE_IMAGES_URL = f"{url1}|{url2}"
 
 params = {
-    "model": "flux",
+    "model": "klein-large",
     "image": REFERENCE_IMAGES_URL,
     "enhance": True,
 }
