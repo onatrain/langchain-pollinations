@@ -7,7 +7,7 @@ img = ImagePollinations()
 data = img.generate(
     "Una perra German Shepherd corriendo en un campo cubierto de grama corta. Estilo fotorrealista, alta calidad",
     params={
-        "model": "klein-large",
+        "model": "zimage",
         "width": 1024,
         "height": 576,
         "enhance": True,
@@ -17,5 +17,5 @@ data = img.generate(
     },
 )
 
-with open("sasha.png", "wb") as f:
+with open("tonga.jpg", "wb") as f:
     f.write(data)
