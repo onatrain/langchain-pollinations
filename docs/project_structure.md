@@ -54,6 +54,14 @@ langchain-pollinations/
 │   ├── project_structure.md
 │   └── tooling.md
 ├── examples/
+│   ├── audio/
+│   │   ├── bad_dialogue.py
+│   │   ├── dialogue.py
+│   │   ├── dialogue.wav
+│   │   ├── three_audios.mp3
+│   │   ├── three_audios.py
+│   │   ├── three_songs.mp3
+│   │   └── three_songs.py
 │   ├── chat_completions/
 │   │   ├── __init__.py
 │   │   ├── audio.mp3
@@ -88,6 +96,7 @@ langchain-pollinations/
 ├── src/
 │   └── langchain_pollinations/
 │       ├── __init__.py
+│       ├── _audio_catalog.py
 │       ├── _auth.py
 │       ├── _client.py
 │       ├── _errors.py
@@ -97,7 +106,9 @@ langchain-pollinations/
 │       ├── chat.py
 │       ├── image.py
 │       ├── models.py
-│       └── py.typed
+│       ├── py.typed
+│       ├── stt.py
+│       └── tts.py
 ├── tests/
 │   ├── integration/
 │   │   ├── conftest.py
@@ -106,6 +117,8 @@ langchain-pollinations/
 │   │   ├── test_chat_streaming.py
 │   │   ├── test_image_endpoint.py
 │   │   ├── test_models_endpoints.py
+│   │   ├── test_stt_endpoint.py
+│   │   ├── test_tts_endpoint.py
 │   │   └── with/
 │   │       ├── conftest.py
 │   │       ├── test_with_config.py
@@ -116,6 +129,7 @@ langchain-pollinations/
 │   │       └── test_with_structured_output_typed_dict.py
 │   └── unit/
 │       ├── test_account.py
+│       ├── test_audio_catalog.py
 │       ├── test_auth.py
 │       ├── test_chat.py
 │       ├── test_client.py
@@ -123,7 +137,10 @@ langchain-pollinations/
 │       ├── test_image.py
 │       ├── test_models.py
 │       ├── test_openai_compat.py
+│       ├── test_post_multipart.py
 │       ├── test_sse.py
-│       └── test_structured_errors.py
+│       ├── test_structured_errors.py
+│       ├── test_stt.py
+│       └── test_tts.py
 └── uv.lock
 ```
