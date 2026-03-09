@@ -11,8 +11,8 @@ from typing import Any, Literal, Optional
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from langchain_core.runnables import Runnable
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient

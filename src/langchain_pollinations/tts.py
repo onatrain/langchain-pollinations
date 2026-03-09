@@ -13,13 +13,13 @@ import warnings
 from typing import Any, Literal, Optional
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from langchain_core.runnables import Runnable
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from langchain_pollinations._audio_catalog import (
     _audio_model_ids_cache,
-    _load_audio_model_ids,
     _audio_model_ids_loaded,  # noqa: F401
+    _load_audio_model_ids,
 )
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
@@ -327,9 +327,7 @@ class TTSPollinations(BaseModel, Runnable[str, bytes]):
         body = self._build_body(text, params, **kwargs)
         return await self._http.apost_json("/v1/audio/speech", body)
 
-    def generate(
-        self, text: str, *, params: dict[str, Any] | None = None, **kwargs: Any
-    ) -> bytes:
+    def generate(self, text: str, *, params: dict[str, Any] | None = None, **kwargs: Any) -> bytes:
         """
         Generate audio synchronously and return the raw audio bytes.
 
