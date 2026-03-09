@@ -11,16 +11,16 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from langchain_core.runnables import Runnable
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from langchain_pollinations._audio_catalog import (
     _audio_model_ids_cache,
-    _load_audio_model_ids,
     _audio_model_ids_loaded,  # noqa: F401
+    _load_audio_model_ids,
 )
 from langchain_pollinations._auth import AuthConfig
 from langchain_pollinations._client import HttpConfig, PollinationsHttpClient
@@ -119,7 +119,7 @@ class TranscriptionResponse(BaseModel):
     text: str
 
 
-class STTPollinations(BaseModel, Runnable[str, bytes]):
+class STTPollinations(BaseModel, Runnable[bytes, Union[TranscriptionResponse, str]]):
     """
     Configurable client for the Pollinations Speech-to-Text endpoint.
 
