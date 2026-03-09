@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-pollinations"
-version = "0.2.6b1"  # PEP 440
+version = "0.3.0b1"  # PEP 440
 description = "LangChain provider for Pollinations unified API (OpenAI-compatible chat completions + image endpoint)."
 license = { text = "MIT" }
 authors = [{ name = "onatrain" }]

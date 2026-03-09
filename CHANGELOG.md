@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Beta]
 
+### [0.3.0b1] - 2026-03-09
+
+#### Added
+- New methods in ModelInformation for audio models listing
+- Enhance ModelInformation.get_available_models() to report audio models
+- New TTSPollinations class for /v1/audio/speech endpoint and audio generation
+- New multipart-form post method in PollinationsHttpClient
+- Added dynamic audio models loading
+- New STTPollinations class for /v1/audio/transcriptions endpoint and audio transcription
+- Added unit tests for ModelInformation
+- Added unit tests for multipart-form posts
+- Added unit tests for dynamic audio models loading
+- Added unit and integration tests for TTSPollinations
+- Added unit and integration tests for STTPollinations
+- Created STTPollinations and TTSPollinations examples
+- Updated documentation
+
+### [0.2.6b3] - 2026-03-08
+
+#### Fixed
+- ImagePollinations correctly inherits from langchain_core.runnables.Runnable
+
+### [0.2.6b2] - 2026-03-07
+
+#### Fixed
+- Security: Bumped langgraph to 1.0.10 to resolve Dependabot alert
+
 ### [0.2.6b1] - 2026-03-02
 
 #### Fixed
