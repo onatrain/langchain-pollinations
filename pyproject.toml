@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-pollinations"
-version = "0.2.6b3"  # PEP 440
+version = "0.2.6b4"  # PEP 440
 description = "LangChain provider for Pollinations unified API (OpenAI-compatible chat completions + image endpoint)."
 license = { text = "MIT" }
 authors = [{ name = "onatrain" }]
@@ -118,4 +118,5 @@ dev = [
   "grip>=4.6.2",
   "pathspec>=1.0.4",
   "twine>=6.2.0",
+  "pyjwt[crypto]>=2.12.1",  # Critical security fix, nested dependency (uv tree --outdated --depth=5)
 ]
