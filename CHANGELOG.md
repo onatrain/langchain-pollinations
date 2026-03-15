@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Beta]
 
+### [0.3.0b2] - 2026-03-15
+
+####  Fixed
+- Security: Bumped pyjwt[crypto] to 2.12.1 to solve Dependabot alert
+
 ### [0.3.0b1] - 2026-03-09
 
 #### Added
@@ -23,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added unit and integration tests for STTPollinations
 - Created STTPollinations and TTSPollinations examples
 - Updated documentation
+
+### [0.2.6b4] - 2026-03-15
+
+####  Fixed
+- Security: Bumped pyjwt[crypto] to 2.12.1 to solve Dependabot alert
 
 ### [0.2.6b3] - 2026-03-08
 
