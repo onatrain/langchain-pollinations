@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Beta]
 
+### [0.2.6b4] - 2026-03-15
+
+#### Fixed
+- Security: Bumped pyjwt[crypto] to 2.12.1 to solve Dependabot alert 
+
 ### [0.2.6b3] - 2026-03-08
 
 #### Fixed
@@ -15,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### [0.2.6b2] - 2026-03-07
 
 #### Fixed
-- Security: Bumped langgraph to 1.0.10 to resolve Dependabot alert 
+- Security: Bumped langgraph to 1.0.10 to solve Dependabot alert 
 
 ### [0.2.6b1] - 2026-03-02
 
@@ -31,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### [0.2.5b2] - 2026-02-21
 
 #### Fixed
-- Security: Bumped langchain-core to 1.2.11 to resolve Dependabot alert 
+- Security: Bumped langchain-core to 1.2.11 to solve Dependabot alert 
 - Fixed: docs/project_structure.md and README.md
 
 ### [0.2.5b1] - 2026-02-19
