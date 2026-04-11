@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Beta]
 
+### [0.3.0b3] - 2026-04-10
+
+####  Fixed
+- Security: Bumped langchain-core to 1.2.28 to solve Dependabot alert
+
 ### [0.3.0b2] - 2026-03-15
 
 ####  Fixed
